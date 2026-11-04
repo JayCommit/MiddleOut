@@ -65,7 +65,10 @@ function splitPath(pathname: string): { bucket?: string; key?: string } {
   return { bucket: decode(rest.slice(0, slash)), key: key || undefined };
 }
 
-function parseRange(header: string | null, size: number): { start: number; end: number } | "bad" | null {
+function parseRange(
+  header: string | null,
+  size: number,
+): { start: number; end: number } | "bad" | null {
   if (!header) return null;
   const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (!match || (match[1] === "" && match[2] === "")) return "bad";
@@ -80,7 +83,8 @@ function parseRange(header: string | null, size: number): { start: number; end: 
     start = Number(match[1]);
     end = match[2] === "" ? size - 1 : Number(match[2]);
   }
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= size || end < start) return "bad";
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= size || end < start)
+    return "bad";
   return { start, end: Math.min(end, size - 1) };
 }
 
@@ -96,7 +100,8 @@ function unescapeXml(value: string): string {
 function deleteKeys(xml: string): string[] {
   const keys: string[] = [];
   const re = /<Key>([\s\S]*?)<\/Key>/g;
-  for (let match = re.exec(xml); match; match = re.exec(xml)) keys.push(unescapeXml(match[1] ?? ""));
+  for (let match = re.exec(xml); match; match = re.exec(xml))
+    keys.push(unescapeXml(match[1] ?? ""));
   return keys;
 }
 
@@ -150,7 +155,8 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     return withCors(xmlError(413, "EntityTooLarge", "The object is larger than 8 MB."));
   }
   let body = Buffer.from(await request.arrayBuffer());
-  if (body.length > MAX_BODY) return withCors(xmlError(413, "EntityTooLarge", "The object is larger than 8 MB."));
+  if (body.length > MAX_BODY)
+    return withCors(xmlError(413, "EntityTooLarge", "The object is larger than 8 MB."));
 
   const mo = request.headers.get("authorization") ?? "";
   let ownerId: string | null = null;
@@ -160,9 +166,11 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   if (mo.startsWith("MO ")) {
     const raw = mo.slice(3).trim();
     const split = raw.indexOf(":");
-    if (split <= 0) return withCors(xmlError(403, "InvalidAccessKeyId", "Access key is malformed."));
+    if (split <= 0)
+      return withCors(xmlError(403, "InvalidAccessKeyId", "Access key is malformed."));
     const auth = await authenticateAccessKey(raw.slice(0, split), raw.slice(split + 1));
-    if (!auth) return withCors(xmlError(403, "InvalidAccessKeyId", "The access key or secret is wrong."));
+    if (!auth)
+      return withCors(xmlError(403, "InvalidAccessKeyId", "The access key or secret is wrong."));
     ownerId = auth.ownerId;
     keyPermission = auth.permission;
     keyBucketScope = auth.bucketScope;
@@ -173,7 +181,8 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     }
     if (parsed) {
       const key = await secretForAccessKey(parsed.accessKeyId);
-      if (!key) return withCors(xmlError(403, "InvalidAccessKeyId", "The access key ID does not exist."));
+      if (!key)
+        return withCors(xmlError(403, "InvalidAccessKeyId", "The access key ID does not exist."));
       const verified = verifySigV4({ request, body, secret: key.secret_key, parsed, now });
       if (!verified.ok) return withCors(xmlError(403, verified.code, verified.message));
       ownerId = key.owner_id;
@@ -198,13 +207,22 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
 
   // Enforce Bucket Scoping
   if (bucket && keyBucketScope && bucket !== keyBucketScope) {
-    return withCors(xmlError(403, "AccessDenied", "Access key is restricted to a different bucket.", `/${bucket}`));
+    return withCors(
+      xmlError(
+        403,
+        "AccessDenied",
+        "Access key is restricted to a different bucket.",
+        `/${bucket}`,
+      ),
+    );
   }
 
   // Enforce Read-Only Permission
   const isMutation = method === "PUT" || method === "POST" || method === "DELETE";
   if (isMutation && keyPermission === "read-only") {
-    return withCors(xmlError(403, "AccessDenied", "Read-only access key cannot perform write operations."));
+    return withCors(
+      xmlError(403, "AccessDenied", "Read-only access key cannot perform write operations."),
+    );
   }
 
   // Root operations (ListBuckets)
@@ -218,11 +236,30 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     return withCors(xmlResponse(200, method === "HEAD" ? "" : xml));
   }
 
+  // Policies from older releases were stored without enforcement. Fail closed
+  // until the owner removes them; new policy writes are explicitly unsupported.
+  const recordWithPolicy = await bucketRecord(bucket);
+  if (
+    recordWithPolicy &&
+    recordWithPolicy.policy !== null &&
+    !(url.searchParams.has("policy") && !key && (method === "GET" || method === "DELETE"))
+  ) {
+    return withCors(
+      xmlError(
+        501,
+        "NotImplemented",
+        "Bucket policies are unsupported. Remove the existing policy before using this bucket.",
+      ),
+    );
+  }
+
   // Location Constraint
   if (url.searchParams.has("location") && !key && (method === "GET" || method === "HEAD")) {
     const record = await bucketRecord(bucket);
-    if (!record) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
-    if (!ownerId || record.owner_id !== ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied.", `/${bucket}`));
+    if (!record)
+      return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+    if (!ownerId || record.owner_id !== ownerId)
+      return withCors(xmlError(403, "AccessDenied", "Access denied.", `/${bucket}`));
     const region = record.region === "us-east-1" ? "" : record.region;
     const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${xmlEscape(region)}</LocationConstraint>`;
     return withCors(xmlResponse(200, method === "HEAD" ? "" : xml));
@@ -231,8 +268,10 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   // Bucket ACL
   if (url.searchParams.has("acl") && !key && method === "GET") {
     const record = await bucketRecord(bucket);
-    if (!record) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
-    if (!ownerId || record.owner_id !== ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied.", `/${bucket}`));
+    if (!record)
+      return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+    if (!ownerId || record.owner_id !== ownerId)
+      return withCors(xmlError(403, "AccessDenied", "Access denied.", `/${bucket}`));
     const allUsers = record.isPublic
       ? `<Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant>`
       : "";
@@ -244,7 +283,8 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const canned = request.headers.get("x-amz-acl") ?? "";
     const text = body.toString("utf8");
-    const isPublic = canned === "public-read" || canned === "public-read-write" || text.includes("AllUsers");
+    const isPublic =
+      canned === "public-read" || canned === "public-read-write" || text.includes("AllUsers");
     const updated = await setBucketAccess(ownerId, bucket, isPublic && canned !== "private");
     if (!updated.ok) return withCors(xmlError(404, "NoSuchBucket", updated.error, `/${bucket}`));
     return withCors(new Response(null, { status: 200 }));
@@ -260,7 +300,9 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
           xmlError(
             res.error === "NoSuchBucket" ? 404 : 404,
             res.error,
-            res.error === "NoSuchBucket" ? "The bucket does not exist." : "The CORS configuration does not exist.",
+            res.error === "NoSuchBucket"
+              ? "The bucket does not exist."
+              : "The CORS configuration does not exist.",
             `/${bucket}`,
           ),
         );
@@ -270,13 +312,15 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (method === "PUT") {
       if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
       const res = await setBucketCors(ownerId, bucket, body.toString("utf8"));
-      if (!res.ok) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+      if (!res.ok)
+        return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
       return withCors(new Response(null, { status: 200 }));
     }
     if (method === "DELETE") {
       if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
       const res = await deleteBucketCors(ownerId, bucket);
-      if (!res.ok) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+      if (!res.ok)
+        return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
       return withCors(new Response(null, { status: 204 }));
     }
   }
@@ -291,23 +335,31 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
           xmlError(
             404,
             res.error,
-            res.error === "NoSuchBucket" ? "The bucket does not exist." : "The bucket policy does not exist.",
+            res.error === "NoSuchBucket"
+              ? "The bucket does not exist."
+              : "The bucket policy does not exist.",
             `/${bucket}`,
           ),
         );
       }
-      return withCors(new Response(res.policy, { status: 200, headers: { "content-type": "application/json" } }));
+      return withCors(
+        new Response(res.policy, { status: 200, headers: { "content-type": "application/json" } }),
+      );
     }
     if (method === "PUT") {
       if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
       const res = await setBucketPolicy(ownerId, bucket, body.toString("utf8"));
-      if (!res.ok) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+      if (!res.ok)
+        return withCors(
+          xmlError(501, "NotImplemented", "Bucket policies are not supported.", `/${bucket}`),
+        );
       return withCors(new Response(null, { status: 204 }));
     }
     if (method === "DELETE") {
       if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
       const res = await deleteBucketPolicy(ownerId, bucket);
-      if (!res.ok) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+      if (!res.ok)
+        return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
       return withCors(new Response(null, { status: 204 }));
     }
   }
@@ -317,7 +369,8 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const prefix = url.searchParams.get("prefix") ?? "";
     const listRes = await listMultipartUploads(ownerId, bucket, prefix);
-    if (!listRes.ok) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+    if (!listRes.ok)
+      return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
     const xml = listMultipartUploadsXml({ bucket, uploads: listRes.uploads });
     return withCors(xmlResponse(200, xml));
   }
@@ -326,10 +379,19 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   if (!key && method === "PUT") {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const acl = request.headers.get("x-amz-acl") ?? "";
-    const created = await createBucket(ownerId, bucket, acl === "public-read" || acl === "public-read-write");
+    const created = await createBucket(
+      ownerId,
+      bucket,
+      acl === "public-read" || acl === "public-read-write",
+    );
     if (!created.ok) {
-      const code = created.error.includes("taken") || created.error.includes("already") ? "BucketAlreadyExists" : "InvalidBucketName";
-      return withCors(xmlError(code === "BucketAlreadyExists" ? 409 : 400, code, created.error, `/${bucket}`));
+      const code =
+        created.error.includes("taken") || created.error.includes("already")
+          ? "BucketAlreadyExists"
+          : "InvalidBucketName";
+      return withCors(
+        xmlError(code === "BucketAlreadyExists" ? 409 : 400, code, created.error, `/${bucket}`),
+      );
     }
     return withCors(new Response(null, { status: 200 }));
   }
@@ -340,7 +402,9 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     const removed = await deleteBucket(ownerId, bucket, false);
     if (!removed.ok) {
       const code = removed.error.includes("not empty") ? "BucketNotEmpty" : "NoSuchBucket";
-      return withCors(xmlError(code === "BucketNotEmpty" ? 409 : 404, code, removed.error, `/${bucket}`));
+      return withCors(
+        xmlError(code === "BucketNotEmpty" ? 409 : 404, code, removed.error, `/${bucket}`),
+      );
     }
     return withCors(new Response(null, { status: 204 }));
   }
@@ -348,16 +412,21 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   // Head Bucket
   if (!key && method === "HEAD") {
     const record = await bucketRecord(bucket);
-    if (!record) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
-    if (record.owner_id !== ownerId && !record.isPublic) return withCors(xmlError(403, "AccessDenied", "Access denied.", `/${bucket}`));
-    return withCors(new Response(null, { status: 200, headers: { "x-amz-bucket-region": record.region } }));
+    if (!record)
+      return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+    if (record.owner_id !== ownerId && !record.isPublic)
+      return withCors(xmlError(403, "AccessDenied", "Access denied.", `/${bucket}`));
+    return withCors(
+      new Response(null, { status: 200, headers: { "x-amz-bucket-region": record.region } }),
+    );
   }
 
   // Batch Delete Objects (POST /bucket?delete)
   if (!key && method === "POST" && url.searchParams.has("delete")) {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const record = await bucketRecord(bucket);
-    if (!record || record.owner_id !== ownerId) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+    if (!record || record.owner_id !== ownerId)
+      return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
 
     const text = body.toString("utf8");
     const isQuiet = /<Quiet>\s*true\s*<\/Quiet>/i.test(text);
@@ -369,7 +438,11 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       if (result.ok) {
         deleted.push(objectKey);
       } else {
-        errors.push({ key: objectKey, code: result.code || "NoSuchKey", message: result.error || "Delete failed" });
+        errors.push({
+          key: objectKey,
+          code: result.code || "NoSuchKey",
+          message: result.error || "Delete failed",
+        });
       }
     }
 
@@ -377,7 +450,10 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       ? ""
       : deleted.map((item) => `<Deleted><Key>${xmlEscape(item)}</Key></Deleted>`).join("");
     const errorXml = errors
-      .map((e) => `<Error><Key>${xmlEscape(e.key)}</Key><Code>${xmlEscape(e.code)}</Code><Message>${xmlEscape(e.message)}</Message></Error>`)
+      .map(
+        (e) =>
+          `<Error><Key>${xmlEscape(e.key)}</Key><Code>${xmlEscape(e.code)}</Code><Message>${xmlEscape(e.message)}</Message></Error>`,
+      )
       .join("");
     const xml = `<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${deletedXml}${errorXml}</DeleteResult>`;
     return withCors(xmlResponse(200, xml));
@@ -397,7 +473,14 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if ("error" in listed) {
       const status = listed.error === "NoSuchBucket" ? 404 : 403;
       const code = status === 404 ? "NoSuchBucket" : "AccessDenied";
-      return withCors(xmlError(status, code, code === "NoSuchBucket" ? "The bucket does not exist." : "Access denied.", `/${bucket}`));
+      return withCors(
+        xmlError(
+          status,
+          code,
+          code === "NoSuchBucket" ? "The bucket does not exist." : "Access denied.",
+          `/${bucket}`,
+        ),
+      );
     }
     const xml = listObjectsXml({
       v2: url.searchParams.get("list-type") === "2",
@@ -420,8 +503,20 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (method === "GET") {
       const tagRes = await getObjectTags(ownerId, bucket, key);
       if (!tagRes.ok) {
-        const code = tagRes.error === "NoSuchBucket" ? "NoSuchBucket" : tagRes.error === "NoSuchKey" ? "NoSuchKey" : "AccessDenied";
-        return withCors(xmlError(code === "AccessDenied" ? 403 : 404, code, "Error reading object tags.", `/${bucket}/${key}`));
+        const code =
+          tagRes.error === "NoSuchBucket"
+            ? "NoSuchBucket"
+            : tagRes.error === "NoSuchKey"
+              ? "NoSuchKey"
+              : "AccessDenied";
+        return withCors(
+          xmlError(
+            code === "AccessDenied" ? 403 : 404,
+            code,
+            "Error reading object tags.",
+            `/${bucket}/${key}`,
+          ),
+        );
       }
       return withCors(xmlResponse(200, taggingXml(tagRes.tags)));
     }
@@ -448,21 +543,46 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   if (key && method === "POST" && url.searchParams.has("uploads")) {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const contentType = request.headers.get("content-type") || "application/octet-stream";
-    const res = await initiateMultipartUpload(ownerId, bucket, key, contentType, metaHeaders(request, body));
+    const res = await initiateMultipartUpload(
+      ownerId,
+      bucket,
+      key,
+      contentType,
+      metaHeaders(request, body),
+    );
     if (!res.ok) {
-      return withCors(xmlError(res.code === "NoSuchBucket" ? 404 : 400, res.code ?? "InvalidArgument", res.error, `/${bucket}/${key}`));
+      return withCors(
+        xmlError(
+          res.code === "NoSuchBucket" ? 404 : 400,
+          res.code ?? "InvalidArgument",
+          res.error,
+          `/${bucket}/${key}`,
+        ),
+      );
     }
     return withCors(xmlResponse(200, initiateMultipartUploadXml(bucket, key, res.uploadId)));
   }
 
   // Upload Part (PUT /bucket/key?uploadId=xxx&partNumber=n)
-  if (key && method === "PUT" && url.searchParams.has("uploadId") && url.searchParams.has("partNumber")) {
+  if (
+    key &&
+    method === "PUT" &&
+    url.searchParams.has("uploadId") &&
+    url.searchParams.has("partNumber")
+  ) {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const uploadId = url.searchParams.get("uploadId") ?? "";
     const partNum = parseInt(url.searchParams.get("partNumber") ?? "0", 10);
     const res = await uploadMultipartPart(ownerId, bucket, key, uploadId, partNum, body);
     if (!res.ok) {
-      return withCors(xmlError(res.code === "NoSuchUpload" ? 404 : 400, res.code ?? "InvalidArgument", res.error, `/${bucket}/${key}`));
+      return withCors(
+        xmlError(
+          res.code === "NoSuchUpload" ? 404 : 400,
+          res.code ?? "InvalidArgument",
+          res.error,
+          `/${bucket}/${key}`,
+        ),
+      );
     }
     const headers = new Headers({ etag: `"${res.etag}"` });
     return withCors(new Response(null, { status: 200, headers }));
@@ -475,9 +595,18 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     const parts = parseCompleteParts(body.toString("utf8"));
     const res = await completeMultipartUpload(ownerId, bucket, key, uploadId, parts);
     if (!res.ok) {
-      return withCors(xmlError(res.code === "NoSuchUpload" ? 404 : 400, res.code ?? "InvalidArgument", res.error, `/${bucket}/${key}`));
+      return withCors(
+        xmlError(
+          res.code === "NoSuchUpload" ? 404 : 400,
+          res.code ?? "InvalidArgument",
+          res.error,
+          `/${bucket}/${key}`,
+        ),
+      );
     }
-    return withCors(xmlResponse(200, completeMultipartUploadXml(bucket, key, res.etag, res.location)));
+    return withCors(
+      xmlResponse(200, completeMultipartUploadXml(bucket, key, res.etag, res.location)),
+    );
   }
 
   // Abort Multipart Upload (DELETE /bucket/key?uploadId=xxx)
@@ -510,11 +639,24 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       decoded = clean;
     }
     const slash = decoded.indexOf("/");
-    if (slash <= 0) return withCors(xmlError(400, "InvalidArgument", "x-amz-copy-source is invalid."));
-    const copied = await copyObject(ownerId, decoded.slice(0, slash), decoded.slice(slash + 1), bucket, key);
+    if (slash <= 0)
+      return withCors(xmlError(400, "InvalidArgument", "x-amz-copy-source is invalid."));
+    const copied = await copyObject(
+      ownerId,
+      decoded.slice(0, slash),
+      decoded.slice(slash + 1),
+      bucket,
+      key,
+    );
     if (!copied.ok) {
       const code = copied.code ?? "AccessDenied";
-      return withCors(xmlError(code === "NoSuchBucket" || code === "NoSuchKey" ? 404 : 403, code, copied.error ?? "Request failed"));
+      return withCors(
+        xmlError(
+          code === "NoSuchBucket" || code === "NoSuchKey" ? 404 : 403,
+          code,
+          copied.error ?? "Request failed",
+        ),
+      );
     }
     const xml = `<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>${copied.updatedAt}</LastModified><ETag>"${copied.etag}"</ETag></CopyObjectResult>`;
     return withCors(xmlResponse(200, xml));
@@ -526,8 +668,11 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     const type = request.headers.get("content-type") || "application/octet-stream";
     const written = await putBytes(ownerId, bucket, key, body, type, metaHeaders(request, body));
     if (!written.ok) {
-      const status = written.code === "NoSuchBucket" ? 404 : written.code === "EntityTooLarge" ? 400 : 400;
-      return withCors(xmlError(status, written.code ?? "InvalidArgument", written.error, `/${bucket}/${key}`));
+      const status =
+        written.code === "NoSuchBucket" ? 404 : written.code === "EntityTooLarge" ? 400 : 400;
+      return withCors(
+        xmlError(status, written.code ?? "InvalidArgument", written.error, `/${bucket}/${key}`),
+      );
     }
     const headers = new Headers({ etag: `"${written.etag}"` });
     const checksum = metaHeaders(request, body)["x-amz-checksum-crc32"];
@@ -552,7 +697,14 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       const missingBucket = found.error === "NoSuchBucket";
       const status = missingBucket ? 404 : found.error === "AccessDenied" ? 403 : 404;
       const code = status === 403 ? "AccessDenied" : found.error || "NoSuchKey";
-      return withCors(xmlError(status, code, status === 403 ? "Access denied." : "The specified key does not exist.", `/${bucket}/${key}`));
+      return withCors(
+        xmlError(
+          status,
+          code,
+          status === 403 ? "Access denied." : "The specified key does not exist.",
+          `/${bucket}/${key}`,
+        ),
+      );
     }
     const object = found.object;
     const quoted = `"${object.etag}"`;
@@ -564,7 +716,13 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     }
     const im = request.headers.get("if-match");
     if (im && im !== "*" && im !== quoted && im !== object.etag) {
-      return withCors(xmlError(412, "PreconditionFailed", "At least one of the preconditions you specified did not hold."));
+      return withCors(
+        xmlError(
+          412,
+          "PreconditionFailed",
+          "At least one of the preconditions you specified did not hold.",
+        ),
+      );
     }
 
     // Conditional headers: Last-Modified
@@ -580,7 +738,13 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (iums) {
       const iumsTime = Date.parse(iums);
       if (!Number.isNaN(iumsTime) && objectTime > iumsTime) {
-        return withCors(xmlError(412, "PreconditionFailed", "At least one of the preconditions you specified did not hold."));
+        return withCors(
+          xmlError(
+            412,
+            "PreconditionFailed",
+            "At least one of the preconditions you specified did not hold.",
+          ),
+        );
       }
     }
 
@@ -596,7 +760,8 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     }
     const start = range?.start ?? 0;
     const end = range ? range.end : object.bytes.length - 1;
-    const slice = object.bytes.length === 0 ? Buffer.alloc(0) : object.bytes.subarray(start, end + 1);
+    const slice =
+      object.bytes.length === 0 ? Buffer.alloc(0) : object.bytes.subarray(start, end + 1);
     const headers = new Headers({
       "content-type": object.contentType || "application/octet-stream",
       "content-length": String(slice.length),
@@ -606,7 +771,12 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     });
     if (range) headers.set("content-range", `bytes ${start}-${end}/${object.bytes.length}`);
     for (const [name, value] of Object.entries(object.headers)) headers.set(name, value);
-    return withCors(new Response(method === "HEAD" ? null : new Uint8Array(slice), { status: range ? 206 : 200, headers }));
+    return withCors(
+      new Response(method === "HEAD" ? null : new Uint8Array(slice), {
+        status: range ? 206 : 200,
+        headers,
+      }),
+    );
   }
 
   return withCors(xmlError(405, "MethodNotAllowed", "The specified method is not allowed."));

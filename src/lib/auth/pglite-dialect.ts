@@ -4,7 +4,7 @@
  */
 import type { PGlite } from "@electric-sql/pglite";
 import {
-  CompiledQuery,
+  type CompiledQuery,
   type DatabaseConnection,
   type DatabaseIntrospector,
   type Dialect,
@@ -21,15 +21,12 @@ import {
 type Client = PGlite;
 
 /** Factory used by `auth/server.ts`: `pgliteDialect(() => getPglite())`. */
-export function pgliteDialect(
-  getClient: () => Promise<Client> | Client,
-): Dialect {
+export function pgliteDialect(getClient: () => Promise<Client> | Client): Dialect {
   return {
     createAdapter: () => new PostgresAdapter(),
     createDriver: () => new LazyPGliteDriver(getClient),
     createQueryCompiler: (): QueryCompiler => new PostgresQueryCompiler(),
-    createIntrospector: (db: Kysely<unknown>): DatabaseIntrospector =>
-      new PostgresIntrospector(db),
+    createIntrospector: (db: Kysely<unknown>): DatabaseIntrospector => new PostgresIntrospector(db),
   };
 }
 
@@ -69,30 +66,19 @@ class LazyPGliteDriver implements Driver {
     next(this.connection);
   }
 
-  async beginTransaction(
-    conn: DatabaseConnection,
-    settings: TransactionSettings,
-  ): Promise<void> {
-    const c = conn as PGliteConnection;
-    if (settings.isolationLevel) {
-      await c.executeQuery(
-        CompiledQuery.raw(
-          `start transaction isolation level ${settings.isolationLevel}`,
-        ),
-      );
-    } else {
-      await c.executeQuery(CompiledQuery.raw("begin"));
+  async beginTransaction(conn: DatabaseConnection, settings: TransactionSettings): Promise<void> {
+    if (settings.isolationLevel && settings.isolationLevel !== "read committed") {
+      throw new Error("Embedded auth supports the default transaction isolation only.");
     }
+    await (conn as PGliteConnection).begin();
   }
 
   async commitTransaction(conn: DatabaseConnection): Promise<void> {
-    await (conn as PGliteConnection).executeQuery(CompiledQuery.raw("commit"));
+    await (conn as PGliteConnection).finish(false);
   }
 
   async rollbackTransaction(conn: DatabaseConnection): Promise<void> {
-    await (conn as PGliteConnection).executeQuery(
-      CompiledQuery.raw("rollback"),
-    );
+    await (conn as PGliteConnection).finish(true);
   }
 
   async destroy(): Promise<void> {
@@ -106,12 +92,50 @@ class LazyPGliteDriver implements Driver {
 }
 
 class PGliteConnection implements DatabaseConnection {
-  constructor(private readonly client: Client) {}
+  private active: Pick<Client, "query">;
+  private settle?: (rollback: boolean) => void;
+  private pending?: Promise<void>;
+  constructor(private readonly client: Client) {
+    this.active = client;
+  }
+
+  async begin(): Promise<void> {
+    let ready!: () => void;
+    let failed!: (error: unknown) => void;
+    const entered = new Promise<void>((resolve, reject) => {
+      ready = resolve;
+      failed = reject;
+    });
+    const done = new Promise<boolean>((resolve) => {
+      this.settle = resolve;
+    });
+    const rollbackSignal = new Error("auth rollback");
+    this.pending = this.client
+      .transaction(async (tx) => {
+        this.active = tx;
+        ready();
+        if (await done) throw rollbackSignal;
+      })
+      .catch((error) => {
+        failed(error);
+        if (error !== rollbackSignal) throw error;
+      });
+    await entered;
+  }
+
+  async finish(rollback: boolean): Promise<void> {
+    this.settle?.(rollback);
+    try {
+      await this.pending;
+    } finally {
+      this.active = this.client;
+      this.settle = undefined;
+      this.pending = undefined;
+    }
+  }
 
   async executeQuery<O>(compiledQuery: CompiledQuery): Promise<QueryResult<O>> {
-    const result = await this.client.query(compiledQuery.sql, [
-      ...compiledQuery.parameters,
-    ]);
+    const result = await this.active.query(compiledQuery.sql, [...compiledQuery.parameters]);
     if (result.affectedRows) {
       return {
         numAffectedRows: BigInt(result.affectedRows),
@@ -128,9 +152,7 @@ class PGliteConnection implements DatabaseConnection {
     if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
       throw new Error("chunkSize must be a positive integer");
     }
-    const result = await this.client.query(compiledQuery.sql, [
-      ...compiledQuery.parameters,
-    ]);
+    const result = await this.active.query(compiledQuery.sql, [...compiledQuery.parameters]);
     for (let i = 0; i < result.rows.length; i += chunkSize) {
       yield { rows: result.rows.slice(i, i + chunkSize) as O[] };
     }

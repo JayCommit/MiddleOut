@@ -3,7 +3,6 @@ dist
 .output
 .nitro
 .tanstack
-.vercel
 .grok
 artifacts
 screenshots
@@ -13,3 +12,6 @@ screenshots
 .project_id
 .node_modules.lock
 .DS_Store
+
+data/
+!.env.example

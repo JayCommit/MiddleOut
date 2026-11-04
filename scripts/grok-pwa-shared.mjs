@@ -81,16 +81,6 @@ export function appNameFromHost(hostHeader) {
   );
 }
 
-/** True for Vercel system domains. Envoy rewrites origin Host to these; they SSO-protect `/og.jpg`. */
-function isVercelSystemHost(host) {
-  return (
-    host === "vercel.app" ||
-    host.endsWith(".vercel.app") ||
-    host === "vercel.com" ||
-    host.endsWith(".vercel.com")
-  );
-}
-
 /** Hostname suitable for absolute og:image URLs. Preview guests (X-Forwarded-Host) are allowed. */
 export function publicAppHost(hostHeader) {
   const host = String(hostHeader ?? "")
@@ -100,7 +90,6 @@ export function publicAppHost(hostHeader) {
     .toLowerCase();
   if (!host || !/^[a-z0-9.-]+$/.test(host) || !host.includes(".")) return "";
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return "";
-  if (isVercelSystemHost(host)) return "";
   return host;
 }
 
@@ -108,12 +97,10 @@ export function publicAppHost(hostHeader) {
  * Published apps always use `VITE_PUBLIC_HOSTNAME` (the grok.me host the
  * deployer injects). Live preview has no such env, so fall back to the
  * request host / X-Forwarded-Host. Never prefer request Host on a published
- * app — Envoy rewrites it to `*.vercel.app`.
+ * app — Envoy rewrites it to an internal upstream hostname.
  */
 export function resolvePublicHost(hostHeader) {
-  return (
-    publicAppHost(process.env?.VITE_PUBLIC_HOSTNAME) || publicAppHost(hostHeader)
-  );
+  return publicAppHost(process.env?.VITE_PUBLIC_HOSTNAME) || publicAppHost(hostHeader);
 }
 
 export function isInstallQuery(url) {
@@ -267,11 +254,11 @@ export function ogCardPublicPath(cwd = process.cwd()) {
 
 function detectCustomOgCard(cwd = process.cwd(), site = {}) {
   if (ogCardPublicPath(cwd)) return true;
-  // Vercel runtime has no public/: trust a bake that already saw the file.
+  // Node server runtime has no public/: trust a bake that already saw the file.
   return siteHasCustomCard(site) || Boolean(String(site.image ?? "").trim());
 }
 
-/** Snapshot for Vite/Nitro to bake into the server bundle (Vercel has no workspace FS). */
+/** Snapshot for Vite/Nitro to bake into the server bundle (Node server has no workspace FS). */
 export function snapshotOgIdentity(cwd = process.cwd()) {
   const site = { ...readOgSite(cwd) };
   const disk = ogCardPublicPath(cwd);
@@ -325,11 +312,14 @@ export function siteHasCustomCard(site = {}) {
 
 /**
  * Preview: public/og.jpg|png on disk.
- * Vercel: the bake (`card=custom` / `image`) because the function cannot stat public/.
+ * Node server: the bake (`card=custom` / `image`) because the function cannot stat public/.
  * Otherwise empty — caller emits the og.grok.me placeholder.
  */
 export function resolveOgCardAsset(site = {}, cwd = process.cwd()) {
-  return ogCardPublicPath(cwd) || (detectCustomOgCard(cwd, site) ? String(site.image ?? "").trim() || "/og.jpg" : "");
+  return (
+    ogCardPublicPath(cwd) ||
+    (detectCustomOgCard(cwd, site) ? String(site.image ?? "").trim() || "/og.jpg" : "")
+  );
 }
 
 /** Stamp `card=custom` when public/og.jpg or public/og.png is on disk. */
@@ -417,7 +407,7 @@ export function normalizeHeadContext(ctx = {}) {
   const cwd = ctx.cwd ?? process.cwd();
   // Middleware passes a baked `site`. Still consult the workspace so a
   // public/og.jpg generated after that snapshot (or missed by a wrong cwd)
-  // wins over the og.grok.me placeholder. Vercel has no public/ to read, so
+  // wins over the og.grok.me placeholder. Node server has no public/ to read, so
   // a correct bake is unchanged.
   const site = applyCustomCardFromFs(
     ctx.site !== undefined ? ctx.site : snapshotOgIdentity(cwd).site,
@@ -439,12 +429,7 @@ export function injectGrokPwaHead(html, ctx = {}) {
   if (typeof html !== "string") return html;
   const { site, projectId, creator, creatorId, host, cwd } = normalizeHeadContext(ctx);
   const documentTitle = titleFromDocument(html);
-  const appName = resolveOgTitle(
-    site,
-    ctx.appName ?? DEFAULT_APP_NAME,
-    host,
-    documentTitle,
-  );
+  const appName = resolveOgTitle(site, ctx.appName ?? DEFAULT_APP_NAME, host, documentTitle);
   let next = stripShareMetaTags(html);
   if (!readGrokExtensionsEnabled()) next = stripGrokExtensionsScript(next);
 

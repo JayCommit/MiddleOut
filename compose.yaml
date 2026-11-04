@@ -1,0 +1,15 @@
+services:
+  middleout:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8080}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      ALLOW_SIGN_UP: ${ALLOW_SIGN_UP:-false}
+      DATABASE_URL: ${DATABASE_URL:-}
+    volumes:
+      - middleout-data:/app/data
+    restart: unless-stopped
+volumes:
+  middleout-data:

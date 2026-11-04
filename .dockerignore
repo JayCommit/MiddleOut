@@ -1,0 +1,13 @@
+.git
+node_modules
+.output
+.nitro
+.tanstack
+data
+.env
+.env.*
+*.log
+artifacts
+screenshots
+
+dist

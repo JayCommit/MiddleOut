@@ -100,7 +100,7 @@ function Console({ pending }: { pending: boolean }) {
 
   return (
     <Shell>
-      <PageHeader title="Dashboard" description="One node. Filesystem objects, embedded metadata, private until you open a bucket." />
+      <PageHeader title="Dashboard" description="One node. Persistent object storage, private until you open a bucket." />
       {pending || (!data && !error) ? <LoadingDash /> : error ? (
         <p className="mt-8 text-sm text-danger">{error}</p>
       ) : data ? (

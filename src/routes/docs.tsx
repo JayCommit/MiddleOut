@@ -8,7 +8,9 @@ export const Route = createFileRoute("/docs")({ component: DocsPage });
 
 const ROWS = [
   ["ListBuckets / Create / Delete / Head", "Yes"],
-  ["GetBucketLocation, ACL, CORS, Policy", "Yes"],
+  ["GetBucketLocation, ACL", "Yes"],
+  ["Bucket policies", "Unsupported (HTTP 501)"],
+  ["Bucket CORS", "Configuration storage only"],
   ["PutObject / GetObject / Head / Delete / Copy", "Yes"],
   ["ListObjects and ListObjectsV2", "Yes, prefix, delimiter, max-keys, continuation-token"],
   ["Range and Conditional Reads (ETag & Last-Modified)", "Yes"],
