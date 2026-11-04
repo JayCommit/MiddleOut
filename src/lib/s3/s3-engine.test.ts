@@ -1,0 +1,335 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { handleS3 } from "./engine.server.ts";
+import { createBucket, createKey, putBytes } from "../storage/queries.server.ts";
+import { checkRateLimit } from "../rate-limiter.ts";
+
+test("checkRateLimit correctly tracks and limits tokens", () => {
+  const key = `test-ip-${Date.now()}`;
+  // 5 tokens capacity
+  for (let i = 0; i < 5; i++) {
+    const res = checkRateLimit(key, 5, 1);
+    assert.equal(res.allowed, true);
+  }
+  // 6th should be rejected
+  const blocked = checkRateLimit(key, 5, 1);
+  assert.equal(blocked.allowed, false);
+  assert.ok(blocked.retryAfter >= 1);
+});
+
+test("S3 endpoint: Anonymous request to non-existent bucket returns 404 NoSuchBucket", async () => {
+  const req = new Request("http://localhost:8080/api/s3/non-existent-bucket-xyz", {
+    method: "HEAD",
+  });
+  const res = await handleS3(req);
+  assert.equal(res.status, 404);
+  const text = await res.text();
+  assert.match(text, /NoSuchBucket/);
+});
+
+test("S3 endpoint: Read-only access key blocks write operations", async () => {
+  const ownerId = `ro-user-${Date.now()}`;
+  await createBucket(ownerId, "ro-test-bucket", false);
+  const keyRes = await createKey(ownerId, "ReadOnlyKey", "read-only");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // Read should be permitted (e.g. HEAD bucket)
+  const headReq = new Request("http://localhost:8080/api/s3/ro-test-bucket", {
+    method: "HEAD",
+    headers: { authorization: authHeader },
+  });
+  const headRes = await handleS3(headReq);
+  assert.equal(headRes.status, 200);
+
+  // Write (PUT object) must be rejected with 403
+  const putReq = new Request("http://localhost:8080/api/s3/ro-test-bucket/file.txt", {
+    method: "PUT",
+    headers: {
+      authorization: authHeader,
+      "content-type": "text/plain",
+    },
+    body: "Hello World",
+  });
+  const putRes = await handleS3(putReq);
+  assert.equal(putRes.status, 403);
+  const xml = await putRes.text();
+  assert.match(xml, /AccessDenied/);
+  assert.match(xml, /Read-only/);
+});
+
+test("S3 endpoint: Scoped access key rejects operations on other buckets", async () => {
+  const ownerId = `scope-user-${Date.now()}`;
+  await createBucket(ownerId, "allowed-bucket", false);
+  await createBucket(ownerId, "forbidden-bucket", false);
+  const keyRes = await createKey(ownerId, "ScopedKey", "full", "allowed-bucket");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // Allowed bucket
+  const okReq = new Request("http://localhost:8080/api/s3/allowed-bucket", {
+    method: "HEAD",
+    headers: { authorization: authHeader },
+  });
+  const okRes = await handleS3(okReq);
+  assert.equal(okRes.status, 200);
+
+  // Forbidden bucket
+  const badReq = new Request("http://localhost:8080/api/s3/forbidden-bucket", {
+    method: "HEAD",
+    headers: { authorization: authHeader },
+  });
+  const badRes = await handleS3(badReq);
+  assert.equal(badRes.status, 403);
+  const xml = await badRes.text();
+  assert.match(xml, /AccessDenied/);
+  assert.match(xml, /restricted/);
+});
+
+test("S3 endpoint: Conditional headers (If-Modified-Since and If-Unmodified-Since)", async () => {
+  const ownerId = `cond-user-${Date.now()}`;
+  await createBucket(ownerId, "cond-bucket", false);
+  const keyRes = await createKey(ownerId, "CondKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // PUT an object
+  await putBytes(ownerId, "cond-bucket", "test.txt", Buffer.from("content"), "text/plain", {});
+
+  // If-Modified-Since in future -> 304 Not Modified
+  const future = new Date(Date.now() + 60_000).toUTCString();
+  const imsReq = new Request("http://localhost:8080/api/s3/cond-bucket/test.txt", {
+    method: "GET",
+    headers: {
+      authorization: authHeader,
+      "if-modified-since": future,
+    },
+  });
+  const imsRes = await handleS3(imsReq);
+  assert.equal(imsRes.status, 304);
+
+  // If-Unmodified-Since in the past -> 412 Precondition Failed
+  const past = new Date(Date.now() - 60_000).toUTCString();
+  const iumsReq = new Request("http://localhost:8080/api/s3/cond-bucket/test.txt", {
+    method: "GET",
+    headers: {
+      authorization: authHeader,
+      "if-unmodified-since": past,
+    },
+  });
+  const iumsRes = await handleS3(iumsReq);
+  assert.equal(iumsRes.status, 412);
+});
+
+test("S3 endpoint: Object Tagging (?tagging)", async () => {
+  const ownerId = `tag-user-${Date.now()}`;
+  await createBucket(ownerId, "tag-bucket", false);
+  const keyRes = await createKey(ownerId, "TagKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // PUT an object
+  await putBytes(ownerId, "tag-bucket", "tagged.txt", Buffer.from("tagged file"), "text/plain", {});
+
+  // PUT tags
+  const putTagReq = new Request("http://localhost:8080/api/s3/tag-bucket/tagged.txt?tagging", {
+    method: "PUT",
+    headers: {
+      authorization: authHeader,
+      "content-type": "application/xml",
+    },
+    body: `<Tagging><TagSet><Tag><Key>Environment</Key><Value>Production</Value></Tag><Tag><Key>Project</Key><Value>MiddleOut</Value></Tag></TagSet></Tagging>`,
+  });
+  const putTagRes = await handleS3(putTagReq);
+  assert.equal(putTagRes.status, 200);
+
+  // GET tags
+  const getTagReq = new Request("http://localhost:8080/api/s3/tag-bucket/tagged.txt?tagging", {
+    method: "GET",
+    headers: { authorization: authHeader },
+  });
+  const getTagRes = await handleS3(getTagReq);
+  assert.equal(getTagRes.status, 200);
+  const xml = await getTagRes.text();
+  assert.match(xml, /<Key>Environment<\/Key>/);
+  assert.match(xml, /<Value>Production<\/Value>/);
+  assert.match(xml, /<Key>Project<\/Key>/);
+  assert.match(xml, /<Value>MiddleOut<\/Value>/);
+
+  // DELETE tags
+  const delTagReq = new Request("http://localhost:8080/api/s3/tag-bucket/tagged.txt?tagging", {
+    method: "DELETE",
+    headers: { authorization: authHeader },
+  });
+  const delTagRes = await handleS3(delTagReq);
+  assert.equal(delTagRes.status, 204);
+
+  // GET tags again -> empty TagSet
+  const getTagAgain = await handleS3(getTagReq);
+  const xmlAgain = await getTagAgain.text();
+  assert.doesNotMatch(xmlAgain, /<Key>Environment<\/Key>/);
+});
+
+test("S3 endpoint: Multipart Upload lifecycle (Initiate -> Upload Parts -> Complete)", async () => {
+  const ownerId = `mp-user-${Date.now()}`;
+  await createBucket(ownerId, "mp-bucket", false);
+  const keyRes = await createKey(ownerId, "MpKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // 1. Initiate
+  const initReq = new Request("http://localhost:8080/api/s3/mp-bucket/bigfile.bin?uploads", {
+    method: "POST",
+    headers: {
+      authorization: authHeader,
+      "content-type": "application/octet-stream",
+    },
+  });
+  const initRes = await handleS3(initReq);
+  assert.equal(initRes.status, 200);
+  const initXml = await initRes.text();
+  const uploadIdMatch = /<UploadId>(.*?)<\/UploadId>/.exec(initXml);
+  assert.ok(uploadIdMatch);
+  const uploadId = uploadIdMatch[1];
+
+  // 2. Upload Part 1
+  const part1Req = new Request(
+    `http://localhost:8080/api/s3/mp-bucket/bigfile.bin?uploadId=${uploadId}&partNumber=1`,
+    {
+      method: "PUT",
+      headers: { authorization: authHeader },
+      body: Buffer.from("First part chunk data. "),
+    },
+  );
+  const part1Res = await handleS3(part1Req);
+  assert.equal(part1Res.status, 200);
+  const etag1 = part1Res.headers.get("etag");
+  assert.ok(etag1);
+
+  // 3. Upload Part 2
+  const part2Req = new Request(
+    `http://localhost:8080/api/s3/mp-bucket/bigfile.bin?uploadId=${uploadId}&partNumber=2`,
+    {
+      method: "PUT",
+      headers: { authorization: authHeader },
+      body: Buffer.from("Second part chunk data."),
+    },
+  );
+  const part2Res = await handleS3(part2Req);
+  assert.equal(part2Res.status, 200);
+  const etag2 = part2Res.headers.get("etag");
+  assert.ok(etag2);
+
+  // 4. List Parts
+  const listPartsReq = new Request(
+    `http://localhost:8080/api/s3/mp-bucket/bigfile.bin?uploadId=${uploadId}`,
+    {
+      method: "GET",
+      headers: { authorization: authHeader },
+    },
+  );
+  const listPartsRes = await handleS3(listPartsReq);
+  assert.equal(listPartsRes.status, 200);
+  const listPartsXml = await listPartsRes.text();
+  assert.match(listPartsXml, /<PartNumber>1<\/PartNumber>/);
+  assert.match(listPartsXml, /<PartNumber>2<\/PartNumber>/);
+
+  // 5. Complete Multipart Upload
+  const completeBody = `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>${etag1}</ETag></Part><Part><PartNumber>2</PartNumber><ETag>${etag2}</ETag></Part></CompleteMultipartUpload>`;
+  const completeReq = new Request(
+    `http://localhost:8080/api/s3/mp-bucket/bigfile.bin?uploadId=${uploadId}`,
+    {
+      method: "POST",
+      headers: { authorization: authHeader },
+      body: completeBody,
+    },
+  );
+  const completeRes = await handleS3(completeReq);
+  assert.equal(completeRes.status, 200);
+  const completeXml = await completeRes.text();
+  assert.match(completeXml, /<CompleteMultipartUploadResult/);
+
+  // 6. Verify object GET
+  const getReq = new Request("http://localhost:8080/api/s3/mp-bucket/bigfile.bin", {
+    method: "GET",
+    headers: { authorization: authHeader },
+  });
+  const getRes = await handleS3(getReq);
+  assert.equal(getRes.status, 200);
+  const content = await getRes.text();
+  assert.equal(content, "First part chunk data. Second part chunk data.");
+});
+
+test("S3 endpoint: Multipart Upload abort lifecycle", async () => {
+  const ownerId = `mp-abort-user-${Date.now()}`;
+  await createBucket(ownerId, "mp-abort-bucket", false);
+  const keyRes = await createKey(ownerId, "MpAbortKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // Initiate
+  const initReq = new Request("http://localhost:8080/api/s3/mp-abort-bucket/abortme.bin?uploads", {
+    method: "POST",
+    headers: { authorization: authHeader },
+  });
+  const initRes = await handleS3(initReq);
+  const initXml = await initRes.text();
+  const uploadId = /<UploadId>(.*?)<\/UploadId>/.exec(initXml)![1];
+
+  // Abort
+  const abortReq = new Request(
+    `http://localhost:8080/api/s3/mp-abort-bucket/abortme.bin?uploadId=${uploadId}`,
+    {
+      method: "DELETE",
+      headers: { authorization: authHeader },
+    },
+  );
+  const abortRes = await handleS3(abortReq);
+  assert.equal(abortRes.status, 204);
+
+  // List parts should now return 404 NoSuchUpload
+  const listPartsReq = new Request(
+    `http://localhost:8080/api/s3/mp-abort-bucket/abortme.bin?uploadId=${uploadId}`,
+    {
+      method: "GET",
+      headers: { authorization: authHeader },
+    },
+  );
+  const listPartsRes = await handleS3(listPartsReq);
+  assert.equal(listPartsRes.status, 404);
+});
+
+test("S3 endpoint: DeleteObjects respects Quiet mode", async () => {
+  const ownerId = `del-quiet-${Date.now()}`;
+  await createBucket(ownerId, "del-quiet-bucket", false);
+  const keyRes = await createKey(ownerId, "DelQuietKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+  await putBytes(ownerId, "del-quiet-bucket", "f1.txt", Buffer.from("1"), "text/plain", {});
+
+  // Quiet delete
+  const quietReq = new Request("http://localhost:8080/api/s3/del-quiet-bucket?delete", {
+    method: "POST",
+    headers: { authorization: authHeader },
+    body: `<Delete><Quiet>true</Quiet><Object><Key>f1.txt</Key></Object></Delete>`,
+  });
+  const quietRes = await handleS3(quietReq);
+  assert.equal(quietRes.status, 200);
+  const xml = await quietRes.text();
+  // In quiet mode, successfully deleted items are omitted
+  assert.doesNotMatch(xml, /<Deleted>/);
+});

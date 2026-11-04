@@ -1,5 +1,5 @@
 import { CHUNK_BYTES, MAX_OBJECT_BYTES, formatBytes, guessType } from "@/lib/storage/pure";
-import { beginUploadFn, finishUploadFn, readPartFn, writePartFn } from "@/lib/storage/api";
+import { abortUploadFn, beginUploadFn, finishUploadFn, readPartFn, writePartFn } from "@/lib/storage/api";
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -32,19 +32,32 @@ export async function uploadFile(opts: {
     data: { bucket: opts.bucket, key: opts.key, size: opts.file.size, contentType },
   });
   if (!started.ok) return started;
-  if (opts.file.size === 0) {
-    opts.onProgress?.(1);
-    return finishUploadFn({ data: { objectId: started.id } });
+
+  try {
+    if (opts.file.size === 0) {
+      opts.onProgress?.(1);
+      return await finishUploadFn({ data: { objectId: started.id } });
+    }
+    const total = Math.ceil(opts.file.size / CHUNK_BYTES);
+    for (let part = 0; part < total; part += 1) {
+      const slice = opts.file.slice(part * CHUNK_BYTES, Math.min(opts.file.size, (part + 1) * CHUNK_BYTES));
+      const data = await blobToBase64(slice);
+      const wrote = await writePartFn({ data: { objectId: started.id, part, data } });
+      if (!wrote.ok) {
+        await abortUploadFn({ data: { objectId: started.id } }).catch(() => undefined);
+        return wrote;
+      }
+      opts.onProgress?.((part + 1) / total);
+    }
+    const finished = await finishUploadFn({ data: { objectId: started.id } });
+    if (!finished.ok) {
+      await abortUploadFn({ data: { objectId: started.id } }).catch(() => undefined);
+    }
+    return finished;
+  } catch (err) {
+    await abortUploadFn({ data: { objectId: started.id } }).catch(() => undefined);
+    throw err;
   }
-  const total = Math.ceil(opts.file.size / CHUNK_BYTES);
-  for (let part = 0; part < total; part += 1) {
-    const slice = opts.file.slice(part * CHUNK_BYTES, Math.min(opts.file.size, (part + 1) * CHUNK_BYTES));
-    const data = await blobToBase64(slice);
-    const wrote = await writePartFn({ data: { objectId: started.id, part, data } });
-    if (!wrote.ok) return wrote;
-    opts.onProgress?.((part + 1) / total);
-  }
-  return finishUploadFn({ data: { objectId: started.id } });
 }
 
 function b64ToBytes(data: string): Uint8Array {

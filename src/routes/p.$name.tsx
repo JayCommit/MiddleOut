@@ -1,7 +1,8 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { Download, Folder, Lock } from "lucide-react";
+import { ArrowRight, Download, Folder, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Logo } from "@/components/logo";
+import { Button } from "@/components/ui";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { accessHintFn, publicListingFn } from "@/lib/storage/api";
 import { withBase } from "@/lib/storage/paths";
@@ -23,9 +24,30 @@ function PublicBrowser() {
   const [owned, setOwned] = useState(false);
   const [data, setData] = useState<Extract<Awaited<ReturnType<typeof publicListingFn>>, { available: true }> | null>(null);
 
+  const [startAfter, setStartAfter] = useState("");
+  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
+
+  function load(cursor = startAfter) {
+    publicListingFn({ data: { bucket: name, prefix, startAfter: cursor } })
+      .then((result) => {
+        if (!result.available) {
+          setState("closed");
+          setData(null);
+          return;
+        }
+        setState("open");
+        setData(result);
+      })
+      .catch(() => {
+        setState("closed");
+      });
+  }
+
   useEffect(() => {
     let cancelled = false;
-    publicListingFn({ data: { bucket: name, prefix } })
+    setStartAfter("");
+    setCursorHistory([]);
+    publicListingFn({ data: { bucket: name, prefix, startAfter: "" } })
       .then((result) => {
         if (cancelled) return;
         if (!result.available) {
@@ -58,6 +80,21 @@ function PublicBrowser() {
       cancelled = true;
     };
   }, [user?.id, state, name]);
+
+  function handleNextPage() {
+    if (!data?.nextStart) return;
+    setCursorHistory((prev) => [...prev, startAfter]);
+    setStartAfter(data.nextStart);
+    load(data.nextStart);
+  }
+
+  function handlePrevPage() {
+    if (cursorHistory.length === 0) return;
+    const prevCursor = cursorHistory[cursorHistory.length - 1] ?? "";
+    setCursorHistory((prev) => prev.slice(0, -1));
+    setStartAfter(prevCursor);
+    load(prevCursor);
+  }
 
   const crumbs = prefix.split("/").filter(Boolean);
 
@@ -136,6 +173,20 @@ function PublicBrowser() {
                 ))}
               </ul>
             )}
+
+            {/* Pagination Controls */}
+            {data.truncated || cursorHistory.length > 0 ? (
+              <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+                <Button type="button" variant="outline" disabled={cursorHistory.length === 0} onClick={handlePrevPage}>
+                  Previous page
+                </Button>
+                <span className="text-xs text-muted">Page {cursorHistory.length + 1}</span>
+                <Button type="button" variant="outline" disabled={!data.truncated} onClick={handleNextPage}>
+                  Next page
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>

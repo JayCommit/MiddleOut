@@ -8,15 +8,17 @@ export const Route = createFileRoute("/docs")({ component: DocsPage });
 
 const ROWS = [
   ["ListBuckets / Create / Delete / Head", "Yes"],
-  ["GetBucketLocation and bucket ACL", "Yes"],
+  ["GetBucketLocation, ACL, CORS, Policy", "Yes"],
   ["PutObject / GetObject / Head / Delete / Copy", "Yes"],
-  ["ListObjects and ListObjectsV2", "Yes, prefix, delimiter, max-keys"],
-  ["Range and If-Match / If-None-Match", "Yes"],
+  ["ListObjects and ListObjectsV2", "Yes, prefix, delimiter, max-keys, continuation-token"],
+  ["Range and Conditional Reads (ETag & Last-Modified)", "Yes"],
+  ["Object Tagging (GET / PUT / DELETE ?tagging)", "Yes"],
+  ["Multipart Upload API (Initiate / Part / Complete / Abort)", "Yes, up to 10,000 parts"],
   ["AWS SigV4 and presigned query URLs", "Yes"],
   ["Authorization: MO key:secret", "Yes, for curl"],
+  ["Access Key Scoping (Read-Only & Bucket-Restricted)", "Yes"],
   ["aws-chunked request bodies", "Yes"],
   ["Public-read buckets", "Yes"],
-  ["Multipart upload API", "No. Single PUT up to 8 MB"],
   ["Versioning, object lock, lifecycle, SSE", "No"],
   ["Virtual-hosted bucket DNS", "No. Path-style only"],
 ];

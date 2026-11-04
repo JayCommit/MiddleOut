@@ -17,7 +17,7 @@ Sign-in is for the console. S3 clients use an access key from **Access keys**, n
 |---|---|
 | Max object | 8 MB |
 | Account quota | 64 MB |
-| Upload | Single PUT only. No multipart upload API. |
+| Upload | Single PUT and full S3 Multipart Upload API (up to 10,000 parts). |
 | Addressing | Path-style only. No virtual-hosted bucket DNS. |
 | Not in this version | Versioning, object lock, lifecycle, SSE. |
 
@@ -75,7 +75,7 @@ force_path_style = true
 
 ## API coverage
 
-Supported: bucket create, delete, head, and list; bucket location and ACL; object put, get, head, delete, and copy; ListObjects and ListObjectsV2 (prefix, delimiter, max-keys); range and conditional reads; SigV4 and presigned URLs; the `MO` authorization header; aws-chunked bodies; public-read buckets.
+Supported: bucket create, delete, head, and list; bucket location, ACL, CORS, and policy; object put, get, head, delete, and copy; S3 Multipart Upload API (InitiateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads); Object Tagging (GET/PUT/DELETE ?tagging); ListObjects and ListObjectsV2 (prefix, delimiter, max-keys, continuation tokens); range and conditional reads (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since); SigV4 and presigned URLs; the `MO` authorization header; access key scoping (Read-Only & Bucket restriction); rate limiting; aws-chunked bodies; public-read buckets; Prometheus metrics (/api/metrics).
 
 ## Layout
 

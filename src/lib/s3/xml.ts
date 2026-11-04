@@ -83,6 +83,103 @@ ${prefixes}
 </ListBucketResult>`;
 }
 
+export function taggingXml(tags: { key: string; value: string }[]): string {
+  const items = tags
+    .map((t) => `    <Tag><Key>${xmlEscape(t.key)}</Key><Value>${xmlEscape(t.value)}</Value></Tag>`)
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <TagSet>
+${items}
+  </TagSet>
+</Tagging>`;
+}
+
+export function parseTaggingXml(xml: string): { key: string; value: string }[] {
+  const tags: { key: string; value: string }[] = [];
+  const tagRe = /<Tag>([\s\S]*?)<\/Tag>/g;
+  let match = tagRe.exec(xml);
+  while (match) {
+    const block = match[1] ?? "";
+    const keyMatch = /<Key>([\s\S]*?)<\/Key>/.exec(block);
+    const valMatch = /<Value>([\s\S]*?)<\/Value>/.exec(block);
+    if (keyMatch && valMatch) {
+      tags.push({ key: keyMatch[1].trim(), value: valMatch[1].trim() });
+    }
+    match = tagRe.exec(xml);
+  }
+  return tags;
+}
+
+export function initiateMultipartUploadXml(bucket: string, key: string, uploadId: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Bucket>${xmlEscape(bucket)}</Bucket>
+  <Key>${xmlEscape(key)}</Key>
+  <UploadId>${xmlEscape(uploadId)}</UploadId>
+</InitiateMultipartUploadResult>`;
+}
+
+export function completeMultipartUploadXml(bucket: string, key: string, etag: string, location: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Location>${xmlEscape(location)}</Location>
+  <Bucket>${xmlEscape(bucket)}</Bucket>
+  <Key>${xmlEscape(key)}</Key>
+  <ETag>"${xmlEscape(etag)}"</ETag>
+</CompleteMultipartUploadResult>`;
+}
+
+export function listPartsXml(opts: {
+  bucket: string;
+  key: string;
+  uploadId: string;
+  ownerId: string;
+  parts: { partNumber: number; size: number; etag: string; updatedAt: string }[];
+}): string {
+  const items = opts.parts
+    .map(
+      (p) => `  <Part>
+    <PartNumber>${p.partNumber}</PartNumber>
+    <LastModified>${xmlEscape(p.updatedAt)}</LastModified>
+    <ETag>"${xmlEscape(p.etag)}"</ETag>
+    <Size>${p.size}</Size>
+  </Part>`,
+    )
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Bucket>${xmlEscape(opts.bucket)}</Bucket>
+  <Key>${xmlEscape(opts.key)}</Key>
+  <UploadId>${xmlEscape(opts.uploadId)}</UploadId>
+  <Owner><ID>${xmlEscape(opts.ownerId)}</ID><DisplayName>${xmlEscape(opts.ownerId)}</DisplayName></Owner>
+  <StorageClass>STANDARD</StorageClass>
+${items}
+</ListPartsResult>`;
+}
+
+export function listMultipartUploadsXml(opts: {
+  bucket: string;
+  uploads: { uploadId: string; key: string; ownerId: string; createdAt: string }[];
+}): string {
+  const items = opts.uploads
+    .map(
+      (u) => `  <Upload>
+    <Key>${xmlEscape(u.key)}</Key>
+    <UploadId>${xmlEscape(u.uploadId)}</UploadId>
+    <Owner><ID>${xmlEscape(u.ownerId)}</ID><DisplayName>${xmlEscape(u.ownerId)}</DisplayName></Owner>
+    <Initiated>${xmlEscape(u.createdAt)}</Initiated>
+    <StorageClass>STANDARD</StorageClass>
+  </Upload>`,
+    )
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Bucket>${xmlEscape(opts.bucket)}</Bucket>
+${items}
+</ListMultipartUploadsResult>`;
+}
+
 export function withCors(res: Response): Response {
   const headers = new Headers(res.headers);
   headers.set("access-control-allow-origin", "*");
