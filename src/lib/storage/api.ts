@@ -118,7 +118,9 @@ export const readPartFn = createServerFn({ method: "POST" })
 
 export const setTagsFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string; key: string; tags: { key: string; value: string }[] }) => input)
+  .validator(
+    (input: { bucket: string; key: string; tags: { key: string; value: string }[] }) => input,
+  )
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.setTags(context.userId, data.bucket, data.key, data.tags ?? []);
@@ -134,11 +136,17 @@ export const listKeysFn = createServerFn({ method: "GET" })
 export const createKeyFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
-    (input: { label: string; permission?: "full" | "read-only"; bucketScope?: string | null }) => input,
+    (input: { label: string; permission?: "full" | "read-only"; bucketScope?: string | null }) =>
+      input,
   )
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.createKey(context.userId, data.label ?? "", data.permission ?? "full", data.bucketScope ?? null);
+    return q.createKey(
+      context.userId,
+      data.label ?? "",
+      data.permission ?? "full",
+      data.bucketScope ?? null,
+    );
   });
 
 export const revokeKeyFn = createServerFn({ method: "POST" })
@@ -151,9 +159,12 @@ export const revokeKeyFn = createServerFn({ method: "POST" })
 
 export const listAuditFn = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }) => {
+  .validator((input: { offset?: number } = {}) => ({
+    offset: Number.isSafeInteger(input.offset) && input.offset! >= 0 ? input.offset! : 0,
+  }))
+  .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.listAudit(context.userId);
+    return q.listAudit(context.userId, data.offset);
   });
 
 export const settingsFn = createServerFn({ method: "GET" })

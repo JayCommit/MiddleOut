@@ -19,7 +19,7 @@ const ROWS = [
   ["AWS SigV4 and presigned query URLs", "Yes"],
   ["Authorization: MO key:secret", "Yes, for curl"],
   ["Access Key Scoping (Read-Only & Bucket-Restricted)", "Yes"],
-  ["aws-chunked request bodies", "Yes"],
+  ["aws-chunked request bodies", "Unsupported (HTTP 501)"],
   ["Public-read buckets", "Yes"],
   ["Versioning, object lock, lifecycle, SSE", "No"],
   ["Virtual-hosted bucket DNS", "No. Path-style only"],

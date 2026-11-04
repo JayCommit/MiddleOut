@@ -44,12 +44,32 @@ try {
     `BETTER_AUTH_URL=${origin}`,
     "-e",
     "ALLOW_SIGN_UP=true",
+    "-e",
+    "METRICS_TOKEN=container-test-metrics-token-32-characters",
     "-v",
     `${volume}:/app/data`,
     image,
   ]);
   docker(["start", name]);
   await healthy();
+  const initialPassword = docker(["logs", name]).match(/Password: (.+)/)?.[1];
+  assert.ok(initialPassword);
+  const login = (password) =>
+    fetch(origin + "/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ email: "admin@middleout.local", password }),
+    });
+  assert.equal((await login(initialPassword)).status, 200);
+  assert.equal((await fetch(origin + "/api/metrics")).status, 401);
+  assert.equal(
+    (
+      await fetch(origin + "/api/metrics", {
+        headers: { authorization: "Bearer container-test-metrics-token-32-characters" },
+      })
+    ).status,
+    200,
+  );
   const signup = await fetch(origin + "/api/auth/sign-up/email", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
@@ -76,6 +96,25 @@ try {
   docker(["stop", "--time", "30", name]);
   assert.equal(docker(["inspect", "--format", "{{.State.ExitCode}}", name]), "0");
   assert.equal(docker(["inspect", "--format", "{{.Config.User}}", name]), "node");
+  const recovery = docker([
+    "run",
+    "--rm",
+    "-v",
+    `${volume}:/app/data`,
+    image,
+    "npm",
+    "run",
+    "admin:reset",
+    "--",
+    "admin@middleout.local",
+  ]);
+  const replacement = recovery.match(/Password: (.+)/)?.[1];
+  assert.ok(replacement);
+  docker(["start", name]);
+  await healthy();
+  assert.equal((await login(initialPassword)).status, 401);
+  assert.equal((await login(replacement)).status, 200);
+  docker(["stop", "--time", "30", name]);
   console.log(
     "PASS: non-root container, health, auth, abrupt termination recovery, persisted session and graceful shutdown.",
   );

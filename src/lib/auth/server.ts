@@ -52,6 +52,17 @@ export const auth = betterAuth({
   plugins: [tanstackStartCookies()],
 });
 
-export const bootstrapReady = process.env.MIDDLEOUT_BOOTSTRAP === "true"
-  ? import("./bootstrap.server").then(({ bootstrapAdmin }) => bootstrapAdmin())
-  : Promise.resolve();
+async function initializeNode() {
+  Object.assign(globalThis, {
+    __middleoutMaintenance__: async () => {
+      const { cleanupExpired } = await import("../storage/queries.server");
+      return cleanupExpired();
+    },
+  });
+  const { bootstrapAdmin, resetPassword } = await import("./bootstrap.server");
+  return process.env.MIDDLEOUT_RESET_EMAIL
+    ? resetPassword(process.env.MIDDLEOUT_RESET_EMAIL)
+    : bootstrapAdmin();
+}
+export const bootstrapReady =
+  process.env.MIDDLEOUT_BOOTSTRAP === "true" ? initializeNode() : Promise.resolve();

@@ -1,5 +1,14 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { ArrowRight, CheckSquare, Download, Folder, FolderPlus, Move, Square, Trash2 } from "lucide-react";
+import {
+  ArrowRight,
+  CheckSquare,
+  Download,
+  Folder,
+  FolderPlus,
+  Move,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Authed } from "@/components/authed";
@@ -63,6 +72,7 @@ function BrowserPage() {
   // Share link duration selection
   const [shareDuration, setShareDuration] = useState(3600);
 
+  const uploadController = useRef<AbortController | null>(null);
   const depth = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -101,22 +111,43 @@ function BrowserPage() {
   }, [user?.id, name, prefix]);
 
   async function sendFiles(files: FileList | File[]) {
+    if (uploadController.current) return;
     const list = [...files];
     if (list.length === 0) return;
-    for (const file of list) {
-      const key = `${prefix}${file.name}`;
-      setJobs((current) => [...current, { name: file.name, ratio: 0 }]);
-      const result = await uploadFile({
-        bucket: name,
-        key,
-        file,
-        onProgress: (ratio) => {
-          setJobs((current) => current.map((job) => (job.name === file.name ? { ...job, ratio } : job)));
-        },
-      });
-      if (!result.ok) toast.error(`${file.name}: ${result.error}`);
+    const controller = new AbortController();
+    uploadController.current = controller;
+    try {
+      for (const file of list) {
+        if (controller.signal.aborted) break;
+        const key = `${prefix}${file.name}`;
+        const existing = await objectDetailFn({ data: { bucket: name, key } });
+        if (existing.ok && !window.confirm(`Replace ${file.name}?`)) continue;
+        setJobs((current) => [...current, { name: file.name, ratio: 0 }]);
+        const result = await uploadFile({
+          bucket: name,
+          key,
+          file,
+          signal: controller.signal,
+          onProgress: (ratio) => {
+            setJobs((current) =>
+              current.map((job) => (job.name === file.name ? { ...job, ratio } : job)),
+            );
+          },
+        });
+        if (!result.ok) toast.error(`${file.name}: ${result.error}`);
+      }
+    } catch (error) {
+      toast.error(
+        controller.signal.aborted
+          ? "Upload cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Upload failed.",
+      );
+    } finally {
+      uploadController.current = null;
+      setJobs([]);
     }
-    setJobs([]);
     await load(startAfter);
   }
 
@@ -138,8 +169,16 @@ function BrowserPage() {
     const blob = await downloadObject(detail.object.id, detail.object.partCount);
     const url = URL.createObjectURL(blob);
     setPreviewUrl(url);
-    if (detail.object.contentType.startsWith("text/") || detail.object.contentType.includes("json") || detail.object.size < 100_000) {
-      if (detail.object.contentType.startsWith("text/") || detail.object.contentType.includes("json") || detail.object.contentType.includes("xml")) {
+    if (
+      detail.object.contentType.startsWith("text/") ||
+      detail.object.contentType.includes("json") ||
+      detail.object.size < 100_000
+    ) {
+      if (
+        detail.object.contentType.startsWith("text/") ||
+        detail.object.contentType.includes("json") ||
+        detail.object.contentType.includes("xml")
+      ) {
         setPreviewText(await blob.text());
       }
     }
@@ -169,7 +208,9 @@ function BrowserPage() {
   }
 
   function toggleSelectKey(key: string) {
-    setSelectedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+    setSelectedKeys((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
   }
 
   async function handleBatchDelete() {
@@ -192,7 +233,9 @@ function BrowserPage() {
       toast.error("Destination key is required");
       return;
     }
-    const res = await moveObjectFn({ data: { bucket: name, sourceKey: moveSourceKey, destKey: dest } });
+    const res = await moveObjectFn({
+      data: { bucket: name, sourceKey: moveSourceKey, destKey: dest },
+    });
     if (!res.ok) {
       toast.error(res.error);
     } else {
@@ -205,8 +248,12 @@ function BrowserPage() {
 
   const crumbs = prefix.split("/").filter(Boolean);
   const query = filter.trim().toLowerCase();
-  const folders = (data?.folders ?? []).filter((item) => leafName(item, prefix).toLowerCase().includes(query));
-  const visibleObjects = (data?.objects ?? []).filter((item) => leafName(item.key, prefix).toLowerCase().includes(query));
+  const folders = (data?.folders ?? []).filter((item) =>
+    leafName(item, prefix).toLowerCase().includes(query),
+  );
+  const visibleObjects = (data?.objects ?? []).filter((item) =>
+    leafName(item.key, prefix).toLowerCase().includes(query),
+  );
 
   return (
     <Authed>
@@ -238,7 +285,11 @@ function BrowserPage() {
               </p>
               <h1 className="mt-1 truncate font-mono text-2xl font-semibold">{name}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted">
-                <button type="button" className="hover:text-fg" onClick={() => navigate({ search: { prefix: "" } })}>
+                <button
+                  type="button"
+                  className="hover:text-fg"
+                  onClick={() => navigate({ search: { prefix: "" } })}
+                >
                   root
                 </button>
                 {crumbs.map((crumb, index) => {
@@ -246,13 +297,21 @@ function BrowserPage() {
                   return (
                     <span key={next} className="flex items-center gap-2">
                       <span>/</span>
-                      <button type="button" className="hover:text-fg" onClick={() => navigate({ search: { prefix: next } })}>
+                      <button
+                        type="button"
+                        className="hover:text-fg"
+                        onClick={() => navigate({ search: { prefix: next } })}
+                      >
                         {crumb}
                       </button>
                     </span>
                   );
                 })}
-                {data ? <Pill tone={data.bucket.isPublic ? "accent" : "neutral"}>{data.bucket.isPublic ? "Public" : "Private"}</Pill> : null}
+                {data ? (
+                  <Pill tone={data.bucket.isPublic ? "accent" : "neutral"}>
+                    {data.bucket.isPublic ? "Public" : "Private"}
+                  </Pill>
+                ) : null}
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -285,7 +344,11 @@ function BrowserPage() {
           ) : null}
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <div className="min-w-[16rem] flex-1">
-              <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter this folder" />
+              <Input
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder="Filter this folder"
+              />
             </div>
             {selectedKeys.length > 0 ? (
               <Button type="button" variant="danger" onClick={() => setBatchDeleteOpen(true)}>
@@ -295,8 +358,18 @@ function BrowserPage() {
             ) : null}
           </div>
           {drag ? (
-            <div className="mt-4 rounded-lg border border-primary bg-raised px-4 py-8 text-center text-sm">Drop files to upload into this folder</div>
+            <div className="mt-4 rounded-lg border border-primary bg-raised px-4 py-8 text-center text-sm">
+              Drop files to upload into this folder
+            </div>
           ) : null}
+          {jobs.length > 0 && (
+            <button
+              className="mt-3 text-sm underline"
+              onClick={() => uploadController.current?.abort()}
+            >
+              Cancel uploads
+            </button>
+          )}
           {jobs.length > 0 ? (
             <ul className="mt-4 flex flex-col gap-2">
               {jobs.map((job) => (
@@ -306,7 +379,10 @@ function BrowserPage() {
                     <span className="text-muted">{Math.round(job.ratio * 100)}%</span>
                   </div>
                   <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-raised">
-                    <div className="h-full bg-primary" style={{ width: `${Math.round(job.ratio * 100)}%` }} />
+                    <div
+                      className="h-full bg-primary"
+                      style={{ width: `${Math.round(job.ratio * 100)}%` }}
+                    />
                   </div>
                 </li>
               ))}
@@ -316,7 +392,10 @@ function BrowserPage() {
           {!error && !data ? <p className="mt-6 text-sm text-muted">Loading objects…</p> : null}
           {data && folders.length === 0 && visibleObjects.length === 0 ? (
             <div className="mt-6">
-              <EmptyState title="This folder is empty" body="Drop files here, or upload from the button above. Folders are just prefixes." />
+              <EmptyState
+                title="This folder is empty"
+                body="Drop files here, or upload from the button above. Folders are just prefixes."
+              />
             </div>
           ) : null}
           {data && (folders.length > 0 || visibleObjects.length > 0) ? (
@@ -353,7 +432,10 @@ function BrowserPage() {
                   </li>
                 ))}
                 {visibleObjects.map((object) => (
-                  <li key={object.id} className="flex items-center gap-2 border-b border-border px-3 last:border-b-0 hover:bg-surface">
+                  <li
+                    key={object.id}
+                    className="flex items-center gap-2 border-b border-border px-3 last:border-b-0 hover:bg-surface"
+                  >
                     <button
                       type="button"
                       aria-label="Select"
@@ -366,9 +448,15 @@ function BrowserPage() {
                         <Square className="h-4 w-4" />
                       )}
                     </button>
-                    <button type="button" className="flex min-w-0 flex-1 items-center gap-3 px-2 py-3 text-left" onClick={() => void openPreview(object.key)}>
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-3 px-2 py-3 text-left"
+                      onClick={() => void openPreview(object.key)}
+                    >
                       <span className="min-w-0">
-                        <span className="block truncate text-sm">{leafName(object.key, prefix)}</span>
+                        <span className="block truncate text-sm">
+                          {leafName(object.key, prefix)}
+                        </span>
                         <span className="text-xs text-muted">
                           {formatBytes(object.size)} · {formatWhen(object.updatedAt)}
                         </span>
@@ -400,10 +488,12 @@ function BrowserPage() {
                       aria-label={`Delete ${leafName(object.key, prefix)}`}
                       className="grid h-11 w-11 place-items-center rounded-md text-muted hover:bg-raised hover:text-danger"
                       onClick={() => {
-                        void removeObjectFn({ data: { bucket: name, key: object.key } }).then((result) => {
-                          if (!result.ok) toast.error(result.error);
-                          else void load(startAfter);
-                        });
+                        void removeObjectFn({ data: { bucket: name, key: object.key } }).then(
+                          (result) => {
+                            if (!result.ok) toast.error(result.error);
+                            else void load(startAfter);
+                          },
+                        );
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -417,11 +507,21 @@ function BrowserPage() {
           {/* Pagination Controls */}
           {data && (data.truncated || cursorHistory.length > 0) ? (
             <div className="mt-4 flex items-center justify-between gap-3 text-sm">
-              <Button type="button" variant="outline" disabled={cursorHistory.length === 0} onClick={handlePrevPage}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={cursorHistory.length === 0}
+                onClick={handlePrevPage}
+              >
                 Previous page
               </Button>
               <span className="text-xs text-muted">Page {cursorHistory.length + 1}</span>
-              <Button type="button" variant="outline" disabled={!data.truncated} onClick={handleNextPage}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!data.truncated}
+                onClick={handleNextPage}
+              >
                 Next page
                 <ArrowRight className="h-4 w-4" />
               </Button>
@@ -441,7 +541,12 @@ function BrowserPage() {
                   return;
                 }
                 const key = `${prefix}${clean}/`;
-                void uploadFile({ bucket: name, key, file: new Blob([]), contentType: "application/x-directory" }).then((result) => {
+                void uploadFile({
+                  bucket: name,
+                  key,
+                  file: new Blob([]),
+                  contentType: "application/x-directory",
+                }).then((result) => {
                   if (!result.ok) toast.error(result.error);
                   else {
                     setFolderOpen(false);
@@ -452,7 +557,11 @@ function BrowserPage() {
               }}
             >
               <Field label="Name">
-                <Input value={folderName} onChange={(event) => setFolderName(event.target.value)} autoFocus />
+                <Input
+                  value={folderName}
+                  onChange={(event) => setFolderName(event.target.value)}
+                  autoFocus
+                />
               </Field>
               <Button type="submit">Create folder</Button>
             </form>
@@ -461,9 +570,13 @@ function BrowserPage() {
 
         {/* Batch Delete Confirmation Modal */}
         {batchDeleteOpen ? (
-          <Modal title={`Delete ${selectedKeys.length} objects`} onClose={() => setBatchDeleteOpen(false)}>
+          <Modal
+            title={`Delete ${selectedKeys.length} objects`}
+            onClose={() => setBatchDeleteOpen(false)}
+          >
             <p className="text-sm text-muted">
-              Are you sure you want to permanently delete these {selectedKeys.length} objects from <span className="font-mono text-fg">{name}</span>? This action cannot be undone.
+              Are you sure you want to permanently delete these {selectedKeys.length} objects from{" "}
+              <span className="font-mono text-fg">{name}</span>? This action cannot be undone.
             </p>
             <div className="mt-6 flex justify-end gap-3">
               <Button type="button" variant="outline" onClick={() => setBatchDeleteOpen(false)}>
@@ -484,7 +597,11 @@ function BrowserPage() {
                 <Input value={moveSourceKey} disabled />
               </Field>
               <Field label="New key name or path">
-                <Input value={moveDestKey} onChange={(e) => setMoveDestKey(e.target.value)} autoFocus />
+                <Input
+                  value={moveDestKey}
+                  onChange={(e) => setMoveDestKey(e.target.value)}
+                  autoFocus
+                />
               </Field>
               <div className="mt-2 flex justify-end gap-3">
                 <Button type="button" variant="outline" onClick={() => setMoveOpen(false)}>
@@ -507,7 +624,8 @@ function BrowserPage() {
           >
             <p className="font-mono text-xs text-muted">{preview.key}</p>
             <p className="mt-1 text-xs text-muted">
-              {formatBytes(preview.size)} · {preview.contentType || guessType(preview.key)} · {preview.etag.slice(0, 12)}
+              {formatBytes(preview.size)} · {preview.contentType || guessType(preview.key)} ·{" "}
+              {preview.etag.slice(0, 12)}
             </p>
             <div className="mt-4">
               <PreviewBody object={preview} url={previewUrl} text={previewText} />
@@ -525,25 +643,42 @@ function BrowserPage() {
               className="mt-4 flex flex-col gap-2 sm:flex-row"
               onSubmit={(event) => {
                 event.preventDefault();
-                const tags = [...preview.tags.filter((tag) => tag.key !== tagKey), { key: tagKey.trim(), value: tagValue }];
-                void setTagsFn({ data: { bucket: name, key: preview.key, tags } }).then((result) => {
-                  if (!result.ok) toast.error(result.error);
-                  else {
-                    setTagKey("");
-                    setTagValue("");
-                    void openPreview(preview.key);
-                  }
-                });
+                const tags = [
+                  ...preview.tags.filter((tag) => tag.key !== tagKey),
+                  { key: tagKey.trim(), value: tagValue },
+                ];
+                void setTagsFn({ data: { bucket: name, key: preview.key, tags } }).then(
+                  (result) => {
+                    if (!result.ok) toast.error(result.error);
+                    else {
+                      setTagKey("");
+                      setTagValue("");
+                      void openPreview(preview.key);
+                    }
+                  },
+                );
               }}
             >
-              <Input value={tagKey} onChange={(event) => setTagKey(event.target.value)} placeholder="Tag" />
-              <Input value={tagValue} onChange={(event) => setTagValue(event.target.value)} placeholder="Value" />
+              <Input
+                value={tagKey}
+                onChange={(event) => setTagKey(event.target.value)}
+                placeholder="Tag"
+              />
+              <Input
+                value={tagValue}
+                onChange={(event) => setTagValue(event.target.value)}
+                placeholder="Value"
+              />
               <Button type="submit" variant="outline">
                 Tag
               </Button>
             </form>
             <div className="mt-6 flex flex-wrap items-center gap-3">
-              <Button type="button" variant="outline" onClick={() => void downloadKey(name, preview.key, Boolean(data?.bucket.isPublic))}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void downloadKey(name, preview.key, Boolean(data?.bucket.isPublic))}
+              >
                 <Download className="h-4 w-4" />
                 Download
               </Button>
@@ -577,10 +712,14 @@ function BrowserPage() {
                   type="button"
                   variant="outline"
                   onClick={() => {
-                    void createLinkFn({ data: { bucket: name, key: preview.key, seconds: shareDuration } }).then((result) => {
+                    void createLinkFn({
+                      data: { bucket: name, key: preview.key, seconds: shareDuration },
+                    }).then((result) => {
                       if (!result.ok) toast.error(result.error);
                       else {
-                        void navigator.clipboard.writeText(absoluteUrl(`/api/share/${result.token}`));
+                        void navigator.clipboard.writeText(
+                          absoluteUrl(`/api/share/${result.token}`),
+                        );
                         toast.success("Share link copied to clipboard");
                       }
                     });
@@ -623,10 +762,24 @@ function PreviewBody({ object, url, text }: { object: Detail; url: string; text:
   if (!url && object.size > 0) return <p className="text-sm text-muted">Preparing preview…</p>;
   const type = object.contentType || guessType(object.key);
   if (object.size === 0) return <p className="text-sm text-muted">Empty object.</p>;
-  if (type.startsWith("image/")) return <img src={url} alt="" className="max-h-96 w-full rounded-md object-contain" />;
+  if (type.startsWith("image/"))
+    return <img src={url} alt="" className="max-h-96 w-full rounded-md object-contain" />;
   if (type.startsWith("video/")) return <video src={url} controls className="w-full rounded-md" />;
   if (type.startsWith("audio/")) return <audio src={url} controls className="w-full" />;
-  if (type === "application/pdf") return <iframe sandbox="" title={object.key} src={url} className="h-96 w-full rounded-md border border-border" />;
-  if (text) return <pre className="max-h-96 overflow-auto rounded-md bg-bg p-3 font-mono text-xs">{text}</pre>;
-  return <p className="text-sm text-muted">No inline preview for this file. Download it instead.</p>;
+  if (type === "application/pdf")
+    return (
+      <iframe
+        sandbox=""
+        title={object.key}
+        src={url}
+        className="h-96 w-full rounded-md border border-border"
+      />
+    );
+  if (text)
+    return (
+      <pre className="max-h-96 overflow-auto rounded-md bg-bg p-3 font-mono text-xs">{text}</pre>
+    );
+  return (
+    <p className="text-sm text-muted">No inline preview for this file. Download it instead.</p>
+  );
 }

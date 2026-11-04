@@ -177,6 +177,32 @@ try {
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("heading", { name: "Dashboard", exact: true }).waitFor();
   assert.deepEqual(failures, []);
+  assert.equal((await client.get("/api/metrics")).status(), 404);
+  const config = await client.get("/api/auth/node-config");
+  assert.equal((await config.json()).registrationEnabled, false);
+  const secondSession = await client.post("/api/auth/sign-in/email", {
+    data: account,
+    headers: { origin },
+  });
+  assert.equal(secondSession.status(), 200);
+  await page.goto(`${origin}/settings`);
+  await page.getByRole("heading", { name: "Account security", exact: true }).waitFor();
+  await page.getByLabel("Current password", { exact: true }).fill(account.password);
+  await page.getByLabel("New password", { exact: true }).fill("updated-local-password-2026");
+  await page.getByRole("button", { name: "Change password", exact: true }).click();
+  await page.getByText("Password changed. Other sessions revoked.", { exact: true }).waitFor();
+  assert.equal(await (await client.get("/api/auth/get-session")).json(), null);
+  const oldLogin = await client.post("/api/auth/sign-in/email", {
+    data: account,
+    headers: { origin },
+  });
+  assert.equal(oldLogin.status(), 401);
+  const newLogin = await client.post("/api/auth/sign-in/email", {
+    data: { ...account, password: "updated-local-password-2026" },
+    headers: { origin },
+  });
+  assert.equal(newLogin.status(), 200, await newLogin.text());
+  assert.deepEqual(failures, []);
   console.log(
     "PASS: standalone server health, local auth, origin rejection, authenticated console, S3 HTTP writes/reads, private access and blocked active documents, restart/session/object/key persistence, registration lockout, sign out and sign in.",
   );

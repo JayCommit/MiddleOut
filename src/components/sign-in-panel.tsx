@@ -1,7 +1,14 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { authClient } from "@/lib/auth/client";
 
 export function SignInPanel({ callbackURL = "/" }: { callbackURL?: string }) {
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
+  useEffect(() => {
+    fetch("/api/auth/node-config")
+      .then((r) => r.json())
+      .then((data) => setRegistrationEnabled(data.registrationEnabled === true))
+      .catch(() => undefined);
+  }, []);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -18,7 +25,9 @@ export function SignInPanel({ callbackURL = "/" }: { callbackURL?: string }) {
         : await authClient.signIn.email({ email, password });
       if (result.error) {
         setError(
-          result.error.message || "Sign in failed. Registration must be enabled by the operator.",
+          result.error.message === "Invalid origin"
+            ? "This address does not match BETTER_AUTH_URL. Ask the operator to set it to the exact browser origin and recreate the container."
+            : result.error.message || "Sign in failed.",
         );
         return;
       }
@@ -80,16 +89,18 @@ export function SignInPanel({ callbackURL = "/" }: { callbackURL?: string }) {
       >
         {pending ? "Please wait…" : creating ? "Create account" : "Sign in"}
       </button>
-      <button
-        type="button"
-        className="text-sm underline"
-        onClick={() => {
-          setCreating(!creating);
-          setError("");
-        }}
-      >
-        {creating ? "Use an existing account" : "Create an account (when enabled by operator)"}
-      </button>
+      {registrationEnabled && (
+        <button
+          type="button"
+          className="text-sm underline"
+          onClick={() => {
+            setCreating(!creating);
+            setError("");
+          }}
+        >
+          {creating ? "Use an existing account" : "Create an account (when enabled by operator)"}
+        </button>
+      )}
     </form>
   );
 }

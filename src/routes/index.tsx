@@ -54,8 +54,13 @@ function Console({ pending }: { pending: boolean }) {
 
   return (
     <Shell>
-      <PageHeader title="Dashboard" description="One node. Persistent object storage, private until you open a bucket." />
-      {pending || (!data && !error) ? <LoadingDash /> : error ? (
+      <PageHeader
+        title="Dashboard"
+        description="One node. Persistent object storage, private until you open a bucket."
+      />
+      {pending || (!data && !error) ? (
+        <LoadingDash />
+      ) : error ? (
         <p className="mt-8 text-sm text-danger">{error}</p>
       ) : data ? (
         <Dashboard data={data} />
@@ -72,6 +77,13 @@ function Dashboard({ data }: { data: Overview }) {
   }));
   return (
     <div className="mt-8 flex flex-col gap-6">
+      <p className="rounded border border-border bg-surface p-3 text-sm">
+        Using the initial password from the logs?{" "}
+        <Link to="/settings" className="underline">
+          Change it in account settings
+        </Link>
+        .
+      </p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Buckets" value={String(data.stats.buckets)} />
         <Stat label="Objects" value={String(data.stats.objects)} />
@@ -97,7 +109,11 @@ function Dashboard({ data }: { data: Overview }) {
           ) : (
             <div className="mt-4 h-56">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chart} layout="vertical" margin={{ left: 8, right: 8, top: 4, bottom: 4 }}>
+                <BarChart
+                  data={chart}
+                  layout="vertical"
+                  margin={{ left: 8, right: 8, top: 4, bottom: 4 }}
+                >
                   <XAxis type="number" hide />
                   <YAxis
                     type="category"
@@ -117,7 +133,12 @@ function Dashboard({ data }: { data: Overview }) {
                       color: "var(--color-fg)",
                     }}
                   />
-                  <Bar dataKey="bytes" fill="var(--color-primary)" radius={[0, 4, 4, 0]} barSize={14} />
+                  <Bar
+                    dataKey="bytes"
+                    fill="var(--color-primary)"
+                    radius={[0, 4, 4, 0]}
+                    barSize={14}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -126,7 +147,9 @@ function Dashboard({ data }: { data: Overview }) {
         <section className="rounded-lg border border-border bg-surface p-4 lg:col-span-2">
           <h2 className="text-sm font-medium">Recent activity</h2>
           <ul className="mt-3 flex flex-col">
-            {data.activity.length === 0 ? <li className="text-sm text-muted">Nothing recorded yet.</li> : null}
+            {data.activity.length === 0 ? (
+              <li className="text-sm text-muted">Nothing recorded yet.</li>
+            ) : null}
             {data.activity.map((event) => (
               <li key={event.id} className="border-b border-border py-3 last:border-b-0">
                 <p className="text-sm">{ACTION_LABEL[event.action] ?? event.action}</p>
@@ -146,13 +169,25 @@ function Dashboard({ data }: { data: Overview }) {
         </div>
         <ul>
           {data.buckets.map((bucket) => (
-            <li key={bucket.id} className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 last:border-b-0">
-              <Link to="/buckets/$name" params={{ name: bucket.name }} search={{ prefix: "" }} className="min-w-0 truncate font-mono text-sm">
+            <li
+              key={bucket.id}
+              className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 last:border-b-0"
+            >
+              <Link
+                to="/buckets/$name"
+                params={{ name: bucket.name }}
+                search={{ prefix: "" }}
+                className="min-w-0 truncate font-mono text-sm"
+              >
                 {bucket.name}
               </Link>
               <div className="flex items-center gap-3">
-                <span className="hidden text-xs text-muted sm:inline">{formatBytes(bucket.bytes)}</span>
-                <Pill tone={bucket.isPublic ? "accent" : "neutral"}>{bucket.isPublic ? "Public" : "Private"}</Pill>
+                <span className="hidden text-xs text-muted sm:inline">
+                  {formatBytes(bucket.bytes)}
+                </span>
+                <Pill tone={bucket.isPublic ? "accent" : "neutral"}>
+                  {bucket.isPublic ? "Public" : "Private"}
+                </Pill>
               </div>
             </li>
           ))}

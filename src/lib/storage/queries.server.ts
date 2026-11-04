@@ -1,9 +1,12 @@
+import {
+  auditRetentionDays,
+  maxObjectBytes as MAX_OBJECT_BYTES,
+  accountQuotaBytes as MAX_ACCOUNT_BYTES,
+} from "../../../scripts/runtime-config.mjs";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { getSql, type Sql } from "../db.ts";
 import {
   CHUNK_BYTES,
-  MAX_ACCOUNT_BYTES,
-  MAX_OBJECT_BYTES,
   formatBytes,
   groupListing,
   normalizeBucketName,
@@ -65,13 +68,13 @@ async function lockAccountForQuota(sql: Sql, ownerId: string): Promise<void> {
 
 async function accountBytes(sql: Sql, ownerId: string): Promise<number> {
   const rows = await sql<{ bytes: unknown }>`
-    select coalesce(sum(o.size), 0)::int as bytes
+    select coalesce(sum(o.size), 0)::bigint as bytes
     from mo_objects o
     join mo_buckets b on b.id = o.bucket_id
     where b.owner_id = ${ownerId}
   `;
   const mpRows = await sql<{ bytes: unknown }>`
-    select coalesce(sum(p.size), 0)::int as bytes
+    select coalesce(sum(p.size), 0)::bigint as bytes
     from mo_multipart_parts p
     join mo_multipart_uploads u on u.id = p.upload_id
     where u.owner_id = ${ownerId}
@@ -134,7 +137,7 @@ async function seed(sql: Sql, ownerId: string) {
     sql,
     pubId,
     "guides/read-me.txt",
-    'Path-style endpoint: /api/s3\n\naws s3 ls --endpoint-url "$ENDPOINT"\n\nSet AWS_REQUEST_CHECKSUM_CALCULATION=when_required\nand AWS_RESPONSE_CHECKSUM_VALIDATION=when_required\nso the AWS CLI does not require extra checksums.\n\nObjects in this node are limited to 8 MB.\n',
+    'Path-style endpoint: /api/s3\n\naws s3 ls --endpoint-url "$ENDPOINT"\n\nSet AWS_REQUEST_CHECKSUM_CALCULATION=when_required\nand AWS_RESPONSE_CHECKSUM_VALIDATION=when_required\nso the AWS CLI does not require extra checksums.\n\nObject limits are configured by the operator; check Settings.\n',
     "text/plain",
   );
   await putDirect(sql, pubId, "brand/mark.svg", MARK_SVG, "image/svg+xml");
@@ -186,7 +189,7 @@ export async function overview(ownerId: string) {
   const buckets = await sql<BucketRow>`
     select b.id, b.name, b.is_public, b.region, b.created_at,
       count(o.id)::int as object_count,
-      coalesce(sum(o.size), 0)::int as bytes
+      coalesce(sum(o.size), 0)::bigint as bytes
     from mo_buckets b
     left join mo_objects o on o.bucket_id = b.id and o.complete = true
     where b.owner_id = ${ownerId}
@@ -412,7 +415,10 @@ export async function beginUpload(
 
     const used = await accountBytes(sql, ownerId);
     if (used + input.size > MAX_ACCOUNT_BYTES) {
-      return { ok: false as const, error: "Account storage limit reached (64 MB)." };
+      return {
+        ok: false as const,
+        error: `Account storage limit reached (${formatBytes(MAX_ACCOUNT_BYTES)}).`,
+      };
     }
     const id = randomUUID();
     await sql`insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers)
@@ -422,7 +428,7 @@ export async function beginUpload(
 }
 
 export async function writePart(ownerId: string, objectId: string, part: number, data: string) {
-  if (!Number.isInteger(part) || part < 0 || part > 64)
+  if (!Number.isInteger(part) || part < 0 || part >= Math.ceil(MAX_OBJECT_BYTES / CHUNK_BYTES))
     return { ok: false as const, error: "Bad part." };
   let buf: Buffer;
   try {
@@ -447,6 +453,7 @@ export async function writePart(ownerId: string, objectId: string, part: number,
     insert into mo_parts (object_id, part, data) values (${objectId}, ${part}, ${data})
     on conflict (object_id, part) do update set data = excluded.data
   `;
+    await sql`update mo_objects set updated_at = now() where id = ${objectId}`;
     return { ok: true as const };
   });
 }
@@ -508,10 +515,20 @@ export async function abortUpload(ownerId: string, objectId: string) {
 
 export async function cleanupExpired(maxAgeSeconds = 86400) {
   const sql = await getSql();
+  const cutoff = new Date(Date.now() - Math.max(3600, maxAgeSeconds) * 1000).toISOString();
+  // Use the same per-account locks as upload writes; recheck inactivity after locking.
+  const owners = await sql<{
+    owner_id: string;
+  }>`select owner_id from mo_accounts order by owner_id`;
+  for (const owner of owners)
+    await sql.transaction(async (tx) => {
+      await lockAccountForQuota(tx, owner.owner_id);
+      await tx`delete from mo_objects where complete = false and updated_at < ${cutoff} and bucket_id in (select id from mo_buckets where owner_id = ${owner.owner_id})`;
+      await tx`delete from mo_multipart_uploads where updated_at < ${cutoff} and owner_id = ${owner.owner_id}`;
+    });
   await sql`delete from mo_links where expires_at < now()`;
-  const cutoff = new Date(Date.now() - maxAgeSeconds * 1000).toISOString();
-  await sql`delete from mo_objects where complete = false and created_at < ${cutoff}`;
-  await sql`delete from mo_multipart_uploads where created_at < ${cutoff}`;
+  const auditCutoff = new Date(Date.now() - auditRetentionDays * 86400000).toISOString();
+  await sql`delete from mo_audit where created_at < ${auditCutoff}`;
   return { ok: true as const };
 }
 
@@ -738,14 +755,14 @@ export async function revokeKey(ownerId: string, id: string) {
   return { ok: true as const };
 }
 
-export async function listAudit(ownerId: string) {
+export async function listAudit(ownerId: string, offset = 0) {
   await ensureAccount(ownerId);
   const sql = await getSql();
   const rows = await sql<{ id: string; action: string; detail: string; created_at: unknown }>`
     select id, action, detail, created_at from mo_audit
     where owner_id = ${ownerId}
-    order by created_at desc
-    limit 100
+    order by created_at desc, id desc
+    limit 100 offset ${Math.max(0, Math.floor(offset))}
   `;
   return rows.map((row) => ({
     id: row.id,
@@ -765,6 +782,10 @@ export async function getSettings(ownerId: string) {
     region: rows[0]?.region ?? "us-east-1",
     quota: MAX_ACCOUNT_BYTES,
     maxObject: MAX_OBJECT_BYTES,
+    origin: new URL(process.env.BETTER_AUTH_URL || "http://localhost:8080").origin,
+    backend: process.env.DATABASE_URL?.trim() ? "Postgres" : "Embedded Postgres",
+    version: "0.2.0",
+    accountMode: "Independent account owner (no node-wide administrator role)",
   };
 }
 
@@ -1207,6 +1228,7 @@ export async function uploadMultipartPart(
     values (${uploadId}, ${partNumber}, ${data.length}, ${etag}, ${b64})
     on conflict (upload_id, part_number) do update set size = excluded.size, etag = excluded.etag, data = excluded.data
   `;
+    await sql`update mo_multipart_uploads set updated_at = now() where id = ${uploadId}`;
     return { ok: true as const, etag, partNumber };
   });
 }

@@ -1,3 +1,4 @@
+import { AccountSettings } from "@/components/account-settings";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -5,7 +6,13 @@ import { Authed } from "@/components/authed";
 import { Shell } from "@/components/shell";
 import { Button, PageHeader } from "@/components/ui";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { cleanupExpiredFn, listSharesFn, revokeShareFn, setRegionFn, settingsFn } from "@/lib/storage/api";
+import {
+  cleanupExpiredFn,
+  listSharesFn,
+  revokeShareFn,
+  setRegionFn,
+  settingsFn,
+} from "@/lib/storage/api";
 import { absoluteUrl, s3Endpoint, withBase } from "@/lib/storage/paths";
 import { REGIONS, formatBytes, formatWhen } from "@/lib/storage/pure";
 
@@ -15,6 +22,7 @@ type ShareRow = Awaited<ReturnType<typeof listSharesFn>>[number];
 
 function SettingsPage() {
   const { user } = useCurrentUserState();
+  const [nodeInfo, setNodeInfo] = useState("");
   const [region, setRegion] = useState("us-east-1");
   const [quota, setQuota] = useState(0);
   const [maxObject, setMaxObject] = useState(0);
@@ -37,6 +45,9 @@ function SettingsPage() {
     settingsFn()
       .then((settings) => {
         if (cancelled) return;
+        setNodeInfo(
+          `${settings.version} · ${settings.backend} · ${settings.origin} · ${settings.accountMode}`,
+        );
         setRegion(settings.region);
         setQuota(settings.quota);
         setMaxObject(settings.maxObject);
@@ -63,10 +74,15 @@ function SettingsPage() {
   return (
     <Authed>
       <Shell>
-        <PageHeader title="Settings" description="Region is a label on new buckets and the location constraint clients read back." />
+        <PageHeader
+          title="Settings"
+          description="Region is a label on new buckets and the location constraint clients read back."
+        />
         <div className="mt-6 grid max-w-2xl gap-4">
+          <AccountSettings />
           <section className="rounded-lg border border-border bg-surface p-4">
             <h2 className="text-sm font-medium">Node</h2>
+            <p className="mt-2 break-all text-xs text-muted">{nodeInfo}</p>
             <dl className="mt-3 grid gap-3 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-muted">Health</dt>
@@ -125,7 +141,9 @@ function SettingsPage() {
                 Save
               </Button>
             </div>
-            <p className="mt-3 text-sm text-muted">Existing buckets keep the region they were created with.</p>
+            <p className="mt-3 text-sm text-muted">
+              Existing buckets keep the region they were created with.
+            </p>
           </section>
 
           <section className="rounded-lg border border-border bg-surface p-4">
@@ -134,13 +152,20 @@ function SettingsPage() {
               <span className="text-xs text-muted">{shares.length} active</span>
             </div>
             {shares.length === 0 ? (
-              <p className="mt-3 text-xs text-muted">No active share links. Create one from any object's preview modal.</p>
+              <p className="mt-3 text-xs text-muted">
+                No active share links. Create one from any object's preview modal.
+              </p>
             ) : (
               <ul className="mt-3 divide-y divide-border rounded-md border border-border">
                 {shares.map((s) => (
-                  <li key={s.token} className="flex flex-wrap items-center justify-between gap-2 p-3 text-xs">
+                  <li
+                    key={s.token}
+                    className="flex flex-wrap items-center justify-between gap-2 p-3 text-xs"
+                  >
                     <div className="min-w-0">
-                      <p className="truncate font-mono font-medium">{s.bucket} / {s.key}</p>
+                      <p className="truncate font-mono font-medium">
+                        {s.bucket} / {s.key}
+                      </p>
                       <p className="text-muted">Expires: {formatWhen(s.expiresAt)}</p>
                     </div>
                     <div className="flex items-center gap-2">
