@@ -76,6 +76,8 @@ test("configured capacity and cleanup preserve recently active and completed upl
   );
   const first = await q.listAudit("readiness", 0);
   const second = await q.listAudit("readiness", 100);
+  assert.equal((await q.listAudit("readiness",0,"does-not-exist")).length,0);
+  assert.equal((await q.listAudit("readiness",0,"test")).length,100);
   assert.equal(first.length, 100);
   assert.equal(second.length, 100);
   assert.equal(first.filter((a) => second.some((b) => a.id === b.id)).length, 0);

@@ -758,12 +758,13 @@ export async function revokeKey(ownerId: string, id: string) {
   return { ok: true as const };
 }
 
-export async function listAudit(ownerId: string, offset = 0) {
+export async function listAudit(ownerId: string, offset = 0, search = "") {
+  const pattern = `%${likePrefix(search.slice(0, 200))}`;
   await ensureAccount(ownerId);
   const sql = await getSql();
   const rows = await sql<{ id: string; action: string; detail: string; created_at: unknown }>`
     select id, action, detail, created_at from mo_audit
-    where owner_id = ${ownerId}
+    where owner_id = ${ownerId} and (action like ${pattern} escape '\\' or detail like ${pattern} escape '\\')
     order by created_at desc, id desc
     limit 100 offset ${Math.max(0, Math.floor(offset))}
   `;

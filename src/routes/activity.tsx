@@ -12,15 +12,17 @@ export const Route = createFileRoute("/activity")({ component: ActivityPage });
 function ActivityPage() {
   const { user } = useCurrentUserState();
   const [rows, setRows] = useState<Awaited<ReturnType<typeof listAuditFn>> | null>(null);
+  const [search, setSearch] = useState("");
+  const [draft, setDraft] = useState("");
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
-    listAuditFn({ data: { offset } })
+    listAuditFn({ data: { offset, search } })
       .then((next) => {
-        if (!cancelled) setRows(next);
+        if (!cancelled) { setRows(next); setError(""); }
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Could not load activity.");
@@ -28,7 +30,7 @@ function ActivityPage() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, offset]);
+  }, [user?.id, offset, search]);
 
   return (
     <Authed>
@@ -37,6 +39,10 @@ function ActivityPage() {
           title="Activity"
           description="Creates, uploads, deletes, and key changes for this account."
         />
+        <form className="mt-4 flex gap-2" onSubmit={event => {event.preventDefault(); setOffset(0); setSearch(draft);}}>
+          <label className="flex-1">Search activity<input className="ml-2 rounded border border-border bg-bg p-2" value={draft} onChange={event=>setDraft(event.target.value)} maxLength={200} /></label>
+          <button type="submit">Search</button>
+        </form>
         {error ? <p className="mt-8 text-sm text-danger">{error}</p> : null}
         {!rows && !error ? <p className="mt-8 text-sm text-muted">Loading activity…</p> : null}
         <div className="mt-4 flex gap-4">

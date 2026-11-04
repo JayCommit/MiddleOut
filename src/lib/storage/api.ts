@@ -159,12 +159,13 @@ export const revokeKeyFn = createServerFn({ method: "POST" })
 
 export const listAuditFn = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .validator((input: { offset?: number } = {}) => ({
+  .validator((input: { offset?: number; search?: string } = {}) => ({
+    search: typeof input.search === "string" ? input.search.slice(0, 200) : "",
     offset: Number.isSafeInteger(input.offset) && input.offset! >= 0 ? input.offset! : 0,
   }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.listAudit(context.userId, data.offset);
+    return q.listAudit(context.userId, data.offset, data.search);
   });
 
 export const settingsFn = createServerFn({ method: "GET" })

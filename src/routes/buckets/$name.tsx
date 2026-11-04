@@ -42,6 +42,9 @@ function BrowserPage() {
   const { name } = Route.useParams();
   const { prefix } = Route.useSearch();
   const navigate = Route.useNavigate();
+  const [prefixDraft, setPrefixDraft] = useState(prefix);
+  useEffect(() => setPrefixDraft(prefix), [prefix]);
+  const navigate = Route.useNavigate();
   const { user } = useCurrentUserState();
   const [data, setData] = useState<Browser | null>(null);
   const [error, setError] = useState("");
@@ -362,6 +365,10 @@ function BrowserPage() {
               Drop files to upload into this folder
             </div>
           ) : null}
+          <form className="mt-4 flex gap-2" onSubmit={event => {event.preventDefault(); void navigate({search:{prefix:prefixDraft}});}}>
+            <label className="flex-1">Object key prefix<input className="ml-2 rounded border border-border bg-bg p-2" value={prefixDraft} onChange={event=>setPrefixDraft(event.target.value)} maxLength={1024} /></label>
+            <button type="submit">Browse prefix</button>
+          </form>
           {jobs.length > 0 && (
             <button
               className="mt-3 text-sm underline"
