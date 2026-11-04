@@ -1,6 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { HardDrive, Lock, Share2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Logo } from "@/components/logo";
 import { SignInPanel } from "@/components/sign-in-panel";
@@ -22,59 +21,14 @@ function Home() {
 
 function Landing() {
   return (
-    <main className="min-h-screen bg-bg text-fg">
-      <header className="mx-auto flex max-w-5xl items-center justify-between px-5 py-5">
+    <main className="grid min-h-screen place-items-center bg-bg px-5 py-12 text-fg">
+      <section className="w-full max-w-sm rounded-lg border border-border bg-surface p-6">
         <Logo />
-        <span className="text-xs tracking-wide text-muted">Single-node storage</span>
-      </header>
-      <section className="mx-auto grid max-w-5xl items-center gap-10 px-5 pb-16 pt-8 md:grid-cols-2 md:pt-16">
-        <div>
-          <p className="text-sm font-medium text-primary">Object storage</p>
-          <h1 className="mt-2 text-4xl font-semibold tracking-tight">Keep the bytes. Drop the cluster.</h1>
-          <p className="mt-4 max-w-md text-base text-muted">
-            Middle Out is a private S3-compatible node: buckets, uploads, presigned links, and a public file browser. Nothing is public until you say so.
-          </p>
-          <div className="mt-6">
-            <SignInPanel />
-          </div>
-        </div>
-        <div className="rounded-lg border border-border bg-surface p-4">
-          <div className="mb-3 flex items-center justify-between text-xs text-muted">
-            <span>Buckets</span>
-            <span>us-east-1</span>
-          </div>
-          <div className="flex flex-col gap-2">
-            <PreviewRow name="public-samples" access="Public" />
-            <PreviewRow name="private-records" access="Private" />
-          </div>
-          <p className="mt-4 text-xs text-muted">Private buckets stay invisible on the public browser.</p>
-        </div>
-      </section>
-      <section className="mx-auto grid max-w-5xl gap-4 px-5 pb-20 md:grid-cols-3">
-        <Feature icon={<Lock className="h-4 w-4" />} title="Private by default" body="Anonymous callers see nothing unless the bucket is explicitly public-read." />
-        <Feature icon={<Share2 className="h-4 w-4" />} title="Public file browser" body="Public buckets get a clean folder view. No console chrome, no other buckets." />
-        <Feature icon={<HardDrive className="h-4 w-4" />} title="Path-style S3" body="Point AWS CLI, rclone, or boto3 at /api/s3 with an access key from this account." />
+        <h1 className="mt-8 text-2xl font-semibold">Storage console</h1>
+        <p className="mb-6 mt-2 text-sm text-muted">Sign in to manage this node.</p>
+        <SignInPanel />
       </section>
     </main>
-  );
-}
-
-function PreviewRow({ name, access }: { name: string; access: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-md border border-border bg-bg px-3 py-3">
-      <span className="font-mono text-sm">{name}</span>
-      <span className="text-xs text-muted">{access}</span>
-    </div>
-  );
-}
-
-function Feature({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <div className="grid h-8 w-8 place-items-center rounded-md bg-raised text-primary">{icon}</div>
-      <h2 className="mt-3 text-sm font-medium">{title}</h2>
-      <p className="mt-1 text-sm text-muted">{body}</p>
-    </div>
   );
 }
 
