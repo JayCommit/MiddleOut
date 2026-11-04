@@ -9,7 +9,7 @@ The `Release gates` workflow runs on pull requests, main/master pushes, version 
 - Real boto3, AWS CLI and rclone: signing, objects, ranges, listing/pagination, copy, tags, presigned URLs and multipart.
 - Linux amd64 and arm64: build and run the non-root Docker image, check health, sessions after abrupt termination and graceful shutdown. An amd64 validation image also exercises a full-filesystem failure on a disposable tmpfs.
 
-A tag beginning with `v` publishes a multi-architecture image to `ghcr.io/<owner>/<repository>` only after all of the above jobs pass. Publication includes provenance and SBOM attestations. The workflow does not change DNS, provision a server, or start production containers.
+A tag beginning with `v` publishes a multi-architecture image to `ghcr.io/<owner>/<repository>` only after all of the above jobs pass. Publication includes provenance and SBOM attestations. The release job also publishes checksummed amd64/arm64 `docker load` archives as public GitHub release assets; these provide anonymous downloads independently of the GHCR package visibility setting. Published release archives are not overwritten by a rerun. The workflow does not change DNS, provision a server, or start production containers.
 
 Never waive a failed container, data-recovery or security gate. Passing local Node tests is insufficient evidence that the container gates passed. This repository does not claim that the Docker gates ran merely because their definitions exist.
 

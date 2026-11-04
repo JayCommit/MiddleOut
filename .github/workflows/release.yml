@@ -119,6 +119,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -144,3 +145,22 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           provenance: true
           sbom: true
+      - name: Publish public container archives
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}"
+          for arch in amd64 arm64; do
+            docker pull --platform "linux/$arch" "$image"
+            test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$arch"
+            docker save "$image" | gzip > "middleout-${GITHUB_REF_NAME}-linux-${arch}.tar.gz"
+          done
+          sha256sum middleout-*.tar.gz > SHA256SUMS
+          if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > release-state.txt 2>/dev/null; then
+            test "$(cat release-state.txt)" = true
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "Middle Out $GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$GITHUB_REF_NAME" middleout-*.tar.gz SHA256SUMS --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false

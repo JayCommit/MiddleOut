@@ -13,15 +13,19 @@ Sign-in is for the console. S3 clients use an access key from **Access keys**, n
 
 ## Limits
 
-|                     |                                                                   |
-| ------------------- | ----------------------------------------------------------------- |
-| Max object          | 8 MB                                                              |
-| Account quota       | 64 MB                                                             |
-| Upload              | Single PUT and S3 Multipart Upload API (up to 10,000 parts). |
-| Addressing          | Path-style only. No virtual-hosted bucket DNS.                    |
-| Not in this version | Versioning, object lock, lifecycle, SSE, IAM bucket policies.     |
+|                     |                                                               |
+| ------------------- | ------------------------------------------------------------- |
+| Max object          | 8 MB                                                          |
+| Account quota       | 64 MB                                                         |
+| Upload              | Single PUT and S3 Multipart Upload API (up to 10,000 parts).  |
+| Addressing          | Path-style only. No virtual-hosted bucket DNS.                |
+| Not in this version | Versioning, object lock, lifecycle, SSE, IAM bucket policies. |
 
 Object bytes live in Postgres as base64 parts, next to the metadata. Region names are labels clients can read back; there is one node.
+
+## Container releases
+
+Download the archive for your architecture and SHA256SUMS from [Releases](https://github.com/JayCommit/MiddleOut/releases), verify the checksum and load it with `docker load -i <archive>`. This works without a registry account. The image is tagged `ghcr.io/jaycommit/middleout:<version>`. A direct registry pull is also available when the package is public; GitHub defaults new registry packages to private independently of source-repository visibility.
 
 ## Self-hosting
 
