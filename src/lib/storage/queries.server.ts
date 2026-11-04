@@ -519,16 +519,19 @@ export async function cleanupExpired(maxAgeSeconds = 86400) {
   // Use the same per-account locks as upload writes; recheck inactivity after locking.
   const owners = await sql<{
     owner_id: string;
-  }>`select owner_id from mo_accounts order by owner_id`;
+  }>`select a.owner_id from mo_accounts a where
+      exists (select 1 from mo_objects o join mo_buckets b on b.id = o.bucket_id where b.owner_id = a.owner_id and o.complete = false and o.updated_at < ${cutoff})
+      or exists (select 1 from mo_multipart_uploads u where u.owner_id = a.owner_id and u.updated_at < ${cutoff})
+      order by a.owner_id limit 100`;
   for (const owner of owners)
     await sql.transaction(async (tx) => {
       await lockAccountForQuota(tx, owner.owner_id);
-      await tx`delete from mo_objects where complete = false and updated_at < ${cutoff} and bucket_id in (select id from mo_buckets where owner_id = ${owner.owner_id})`;
-      await tx`delete from mo_multipart_uploads where updated_at < ${cutoff} and owner_id = ${owner.owner_id}`;
+      await tx`delete from mo_objects where id in (select id from mo_objects where complete = false and updated_at < ${cutoff} and bucket_id in (select id from mo_buckets where owner_id = ${owner.owner_id}) limit 1000)`;
+      await tx`delete from mo_multipart_uploads where id in (select id from mo_multipart_uploads where updated_at < ${cutoff} and owner_id = ${owner.owner_id} limit 1000)`;
     });
-  await sql`delete from mo_links where expires_at < now()`;
+  await sql`delete from mo_links where token in (select token from mo_links where expires_at < now() limit 1000)`;
   const auditCutoff = new Date(Date.now() - auditRetentionDays * 86400000).toISOString();
-  await sql`delete from mo_audit where created_at < ${auditCutoff}`;
+  await sql`delete from mo_audit where id in (select id from mo_audit where created_at < ${auditCutoff} limit 1000)`;
   return { ok: true as const };
 }
 
