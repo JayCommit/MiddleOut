@@ -17,7 +17,7 @@ Sign-in is for the console. S3 clients use an access key from **Access keys**, n
 | ------------------- | ----------------------------------------------------------------- |
 | Max object          | 8 MB                                                              |
 | Account quota       | 64 MB                                                             |
-| Upload              | Single PUT and full S3 Multipart Upload API (up to 10,000 parts). |
+| Upload              | Single PUT and S3 Multipart Upload API (up to 10,000 parts). |
 | Addressing          | Path-style only. No virtual-hosted bucket DNS.                    |
 | Not in this version | Versioning, object lock, lifecycle, SSE, IAM bucket policies.     |
 
@@ -117,9 +117,43 @@ force_path_style = true
 
 `GET /api/health` returns `{ "ok": true }` when the database answers. `GET /api/metrics` is the metrics endpoint.
 
+## Internet deployment and recovery
+
+Raw Compose HTTP binds to loopback by default. To expose it through automatic HTTPS:
+
+```bash
+# In .env, set MIDDLEOUT_DOMAIN=storage.example.com
+# and BETTER_AUTH_URL=https://storage.example.com
+# Point the domain at this host and make ports 80/443 reachable.
+docker compose -f compose.yaml -f compose.https.yaml up -d --build
+```
+
+The Caddy overlay obtains TLS certificates and blocks the node-wide metrics endpoint externally. The application does not trust caller-supplied forwarding headers for rate limits. Requests behind a proxy share that proxy's application-level limiter; configure additional per-client limits at your proxy if needed. Uploaded HTML, SVG and XML download as attachments; all object/S3 responses use sandbox and nosniff protections. Same-origin user-uploaded websites are intentionally unsupported.
+
+The database takes an exclusive heartbeat lock in every embedded mode, including development and preview. Run only one process per DATA_DIR. After an abrupt crash, restart may wait up to roughly 30 seconds to reclaim a stale lock. Do not manually remove a live node's lock.
+
+### Embedded backups
+
+Stop the node before backing up. The maintenance command refuses a live embedded database and writes a SHA-256 manifest:
+
+```bash
+npm run backup -- /absolute/path/to/backups/node-2026-11-04
+# On a separate stopped node, set DATA_DIR to an ABSENT restore target:
+npm run restore -- /absolute/path/to/backups/node-2026-11-04
+npm start
+```
+
+DATA_DIR and the backup directory must be separate non-nested paths. Backup destinations must be new; restore never overwrites existing directories. Retain auth-secret with the database. Protect backup directories with filesystem permissions and encryption; checksums detect corruption, not malicious replacement of both data and manifest. For container maintenance, stop the service, then run the same scripts in a one-off container with the data volume mounted at /app/data and a separate backup directory writable by UID 1000. Do not use a raw copy of a running embedded database.
+
+For external Postgres, use a matching or newer `pg_dump` client to make a custom-format dump, restore it to a separate empty database with `pg_restore --exit-on-error`, and separately retain BETTER_AUTH_SECRET. The embedded backup tool deliberately refuses external-Postgres mode.
+
+The release gates include backup/restore, old-schema upgrade, abrupt restart and constrained-filesystem tests. See [RELEASING.md](RELEASING.md) for the exact gates and the versioned container publication process. See [SECURITY.md](SECURITY.md) for reporting and security boundaries. The project is licensed under [MIT](LICENSE).
+
+Signed streaming payloads and aws-chunked encodings return HTTP 501. Use single PUT or multipart with `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The maximum object remains 8 MiB and the account quota remains 64 MiB; this is a small single-node object store.
+
 ## API coverage
 
-Supported: bucket create, delete, head, and list; bucket location, ACL, and CORS configuration storage (CORS rules are not enforced per bucket); object put, get, head, delete, and copy; S3 Multipart Upload API (InitiateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads); Object Tagging (GET/PUT/DELETE ?tagging); ListObjects and ListObjectsV2 (prefix, delimiter, max-keys, continuation tokens); range and conditional reads (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since); SigV4 and presigned URLs; the `MO` authorization header; access key scoping (Read-Only & Bucket restriction); rate limiting; aws-chunked bodies; public-read buckets; Prometheus metrics (/api/metrics).
+Supported: bucket create, delete, head, and list; bucket location, ACL, and CORS configuration storage (CORS rules are not enforced per bucket); object put, get, head, delete, and copy; S3 Multipart Upload API (InitiateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads); Object Tagging (GET/PUT/DELETE ?tagging); ListObjects and ListObjectsV2 (prefix, delimiter, max-keys, continuation tokens); range and conditional reads (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since); SigV4 and presigned URLs; the `MO` authorization header; access key scoping (Read-Only & Bucket restriction); bounded request bodies; rate limiting; public-read buckets; Prometheus metrics (/api/metrics).
 
 ## Layout
 

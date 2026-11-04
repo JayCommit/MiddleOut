@@ -51,7 +51,8 @@ export function validateKey(key: string): string | null {
   if (!key) return "Object name is required.";
   if (key.startsWith("/") || key.includes("//")) return "Object name is invalid.";
   if (key.includes("\0") || key.length > 1024) return "Object name is invalid.";
-  if (key.split("/").some((part) => part === "." || part === "..")) return "Object name is invalid.";
+  if (key.split("/").some((part) => part === "." || part === ".."))
+    return "Object name is invalid.";
   return null;
 }
 
@@ -103,7 +104,13 @@ export type ListingRow = { key: string };
 
 export function groupListing<T extends ListingRow>(
   rows: T[],
-  opts: { prefix: string; delimiter: string; maxKeys: number; rawCapped: boolean },
+  opts: {
+    prefix: string;
+    delimiter: string;
+    maxKeys: number;
+    rawCapped: boolean;
+    skipExactPrefix?: boolean;
+  },
 ): { contents: T[]; prefixes: string[]; truncated: boolean; nextStart: string | null } {
   if (opts.maxKeys <= 0) return { contents: [], prefixes: [], truncated: false, nextStart: null };
   const contents: T[] = [];
@@ -115,7 +122,7 @@ export function groupListing<T extends ListingRow>(
   let lastConsumed: string | null = null;
 
   for (const row of rows) {
-    if (!row.key.startsWith(opts.prefix) || row.key === opts.prefix) {
+    if (!row.key.startsWith(opts.prefix) || (opts.skipExactPrefix && row.key === opts.prefix)) {
       lastConsumed = row.key;
       continue;
     }
@@ -150,5 +157,8 @@ export function groupListing<T extends ListingRow>(
 }
 
 export function encodeKeyPath(key: string): string {
-  return key.split("/").map((part) => encodeURIComponent(part)).join("/");
+  return key
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
 }

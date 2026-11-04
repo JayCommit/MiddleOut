@@ -40,7 +40,7 @@ async function start(registration) {
   for (let attempt = 0; attempt < 120; attempt++) {
     if (server.exitCode !== null) throw new Error(logs);
     try {
-      if ((await fetch(`${origin}/api/health`)).ok) return;
+      if ((await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1500) })).ok) return;
     } catch {
       /* Server is still starting. */
     }
@@ -117,6 +117,40 @@ try {
     "persisted HTTP object",
   );
   assert.equal((await fetch(`${origin}/api/s3/http-smoke/file.txt`)).status, 403);
+  const html = `<html><script>fetch('/api/auth/get-session?untrusted-object-proof').then(()=>{document.title='executed'})</script><body>untrusted</body></html>`;
+  assert.equal(
+    (
+      await client.put("/api/s3/http-active", {
+        headers: { ...s3Headers, "x-amz-acl": "public-read" },
+      })
+    ).status(),
+    200,
+  );
+  assert.equal(
+    (
+      await client.put("/api/s3/http-active/evil.html", {
+        headers: { ...s3Headers, "content-type": "text/html" },
+        data: html,
+      })
+    ).status(),
+    200,
+  );
+  let scriptRequests = 0;
+  context.on("request", (request) => {
+    if (request.url().includes("untrusted-object-proof")) scriptRequests++;
+  });
+  for (const path of ["/api/public/http-active/evil.html", "/api/s3/http-active/evil.html"]) {
+    const response = await client.get(path);
+    assert.match(response.headers()["content-security-policy"], /^sandbox;/);
+    assert.equal(response.headers()["x-content-type-options"], "nosniff");
+    assert.match(response.headers()["content-disposition"], /^attachment;/);
+    const untrustedPage = await context.newPage();
+    const downloaded = untrustedPage.waitForEvent("download");
+    await untrustedPage.goto(origin + path).catch(() => undefined);
+    await downloaded;
+    await untrustedPage.close();
+  }
+  assert.equal(scriptRequests, 0, "Uploaded documents must not execute with the operator session.");
   // A stored session must still verify after a full server restart, and new
   // account creation must be rejected after registration is disabled.
   await stop();
@@ -144,7 +178,7 @@ try {
   await page.getByRole("heading", { name: "Dashboard", exact: true }).waitFor();
   assert.deepEqual(failures, []);
   console.log(
-    "PASS: standalone server health, local auth, origin rejection, authenticated console, S3 HTTP writes/reads and private access, restart/session/object/key persistence, registration lockout, sign out and sign in.",
+    "PASS: standalone server health, local auth, origin rejection, authenticated console, S3 HTTP writes/reads, private access and blocked active documents, restart/session/object/key persistence, registration lockout, sign out and sign in.",
   );
 } catch (error) {
   console.error(logs);

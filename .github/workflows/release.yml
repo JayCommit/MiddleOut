@@ -1,0 +1,141 @@
+name: Release gates
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 22 }
+          - { os: ubuntu-latest, node: 24 }
+          - { os: windows-latest, node: 22 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=low
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:selfhost
+  postgres:
+    strategy:
+      matrix:
+        backend: [service17, local18]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: middleout_test
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run test:postgres
+        env:
+          TEST_DATABASE_URL: ${{ matrix.backend == 'service17' && 'postgresql://test:test-only-password@127.0.0.1:5432/middleout_test' || '' }}
+      - name: Verify external Postgres backup and restore
+        if: matrix.backend == 'service17'
+        shell: bash
+        run: |
+          docker exec ${{ job.services.postgres.id }} pg_dump -U test -d middleout_test -Fc -f /tmp/middleout.dump
+          docker exec ${{ job.services.postgres.id }} createdb -U test middleout_restore
+          docker exec ${{ job.services.postgres.id }} pg_restore -U test --exit-on-error -d middleout_restore /tmp/middleout.dump
+          original=$(docker exec ${{ job.services.postgres.id }} psql -U test -d middleout_test -Atc 'select count(*) from mo_parts')
+          restored=$(docker exec ${{ job.services.postgres.id }} psql -U test -d middleout_restore -Atc 'select count(*) from mo_parts')
+          test "$original" = "$restored"
+  clients:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: npm ci
+      - run: python -m pip install -r requirements-test.txt
+      - run: sudo apt-get update && sudo apt-get install -y rclone
+      - run: npm run build
+      - run: npm run test:clients
+  containers:
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: middleout:release-test
+      - run: node scripts/test-docker.mjs
+        env: { TEST_IMAGE: "middleout:release-test" }
+      - name: Build disk-pressure validation image
+        if: matrix.platform == 'linux/amd64'
+        run: docker build --target validation -t middleout:fault-test .
+      - name: Validate filesystem exhaustion recovery
+        if: matrix.platform == 'linux/amd64'
+        run: docker run --rm --network none --tmpfs /app/data:rw,size=128m,uid=1000,gid=1000 middleout:fault-test node --experimental-strip-types scripts/disk-pressure.mjs
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    needs: [verify, postgres, clients, containers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: true
+          sbom: true

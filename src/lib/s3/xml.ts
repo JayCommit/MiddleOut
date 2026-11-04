@@ -1,3 +1,4 @@
+import { untrustedResponseHeaders } from "../storage/response-headers.ts";
 export function xmlEscape(value: string): string {
   return value.replace(/[&<>"]/g, (ch) => {
     if (ch === "&") return "\u0026amp;";
@@ -23,7 +24,10 @@ export function xmlError(status: number, code: string, message: string, resource
   return xmlResponse(status, body, { "x-amz-error-code": code });
 }
 
-export function listBucketsXml(buckets: { name: string; createdAt: string }[], owner: string): string {
+export function listBucketsXml(
+  buckets: { name: string; createdAt: string }[],
+  owner: string,
+): string {
   const items = buckets
     .map(
       (b) =>
@@ -64,11 +68,12 @@ export function listObjectsXml(opts: {
   const prefixes = opts.prefixes
     .map((p) => `  <CommonPrefixes><Prefix>${xmlEscape(p)}</Prefix></CommonPrefixes>`)
     .join("\n");
-  const token = opts.truncated && opts.next
-    ? opts.v2
-      ? `<NextContinuationToken>${xmlEscape(opts.next)}</NextContinuationToken>`
-      : `<NextMarker>${xmlEscape(opts.next)}</NextMarker>`
-    : "";
+  const token =
+    opts.truncated && opts.next
+      ? opts.v2
+        ? `<NextContinuationToken>${xmlEscape(opts.next)}</NextContinuationToken>`
+        : `<NextMarker>${xmlEscape(opts.next)}</NextMarker>`
+      : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>${xmlEscape(opts.bucket)}</Name>
@@ -120,7 +125,12 @@ export function initiateMultipartUploadXml(bucket: string, key: string, uploadId
 </InitiateMultipartUploadResult>`;
 }
 
-export function completeMultipartUploadXml(bucket: string, key: string, etag: string, location: string): string {
+export function completeMultipartUploadXml(
+  bucket: string,
+  key: string,
+  etag: string,
+  location: string,
+): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Location>${xmlEscape(location)}</Location>
@@ -181,7 +191,7 @@ ${items}
 }
 
 export function withCors(res: Response): Response {
-  const headers = new Headers(res.headers);
+  const headers = untrustedResponseHeaders(new Headers(res.headers));
   headers.set("access-control-allow-origin", "*");
   headers.set("access-control-allow-methods", "GET, PUT, POST, DELETE, HEAD, OPTIONS");
   headers.set("access-control-allow-headers", "*");

@@ -38,6 +38,7 @@ const globalRef = globalThis as typeof globalThis & {
   __pgSqlPromise__?: Promise<Sql>;
   __pgliteInstance__?: Promise<import("@electric-sql/pglite").PGlite>;
   __pgliteMigrateChain__?: Promise<void>;
+  __pgliteReleaseLock__?: () => Promise<void>;
 };
 
 /**
@@ -85,7 +86,7 @@ function createPostgresSql(): Promise<Sql> {
     types.setTypeParser(OID_INT8, Number);
     types.setTypeParser(OID_DATE, identity);
     types.setTypeParser(OID_INTERVAL, identity);
-    const pool = new Pool({ connectionString: databaseUrl });
+    const pool = new Pool({ connectionString: databaseUrl, allowExitOnIdle: true });
     const run: Run = async <T>(text: string, params: unknown[]) =>
       (await pool.query(text, params)).rows as T[];
     return toSql(run, async (fn) => {
@@ -158,7 +159,11 @@ async function createPgliteSql(): Promise<Sql> {
       process.env.DATA_DIR === ":memory:"
         ? undefined
         : resolve(process.env.DATA_DIR || "data", "db");
-    if (dataDir) await mkdir(dataDir, { recursive: true });
+    if (dataDir) {
+      await mkdir(dataDir, { recursive: true });
+      const { acquireDataLock } = await import("../../scripts/data-directory.mjs");
+      globalRef.__pgliteReleaseLock__ = await acquireDataLock(resolve(dataDir, ".."), true);
+    }
     const pg = new PGlite({
       dataDir,
       ...assets,
@@ -173,7 +178,9 @@ async function createPgliteSql(): Promise<Sql> {
       "create table if not exists _migrations (name text primary key, applied_at timestamptz not null default now())",
     );
     return pg;
-  })().catch((err) => {
+  })().catch(async (err) => {
+    await globalRef.__pgliteReleaseLock__?.();
+    globalRef.__pgliteReleaseLock__ = undefined;
     globalRef.__pgliteInstance__ = undefined;
     throw err;
   });

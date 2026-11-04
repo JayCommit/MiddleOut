@@ -323,6 +323,7 @@ export async function browse(ownerId: string, name: string, prefix: string, star
     prefix,
     delimiter: "/",
     maxKeys: 50,
+    skipExactPrefix: true,
     rawCapped: rows.length === 5000,
   });
   return {
@@ -891,6 +892,7 @@ export async function publicListing(name: string, prefix: string, startAfter = "
     prefix,
     delimiter: "/",
     maxKeys: 50,
+    skipExactPrefix: true,
     rawCapped: rows.length === 5000,
   });
   return {

@@ -3,7 +3,13 @@ import test from "node:test";
 import { groupListing, validateBucketName } from "./pure.ts";
 
 test("groupListing folds keys under a delimiter", () => {
-  const rows = [{ key: "a.txt" }, { key: "b/c.txt" }, { key: "b/d.txt" }, { key: "b/" }, { key: "e.txt" }];
+  const rows = [
+    { key: "a.txt" },
+    { key: "b/c.txt" },
+    { key: "b/d.txt" },
+    { key: "b/" },
+    { key: "e.txt" },
+  ];
   const page = groupListing(rows, { prefix: "", delimiter: "/", maxKeys: 100, rawCapped: false });
   assert.deepEqual(page.prefixes, ["b/"]);
   assert.deepEqual(
@@ -28,4 +34,17 @@ test("bucket names follow S3 shape", () => {
   assert.equal(validateBucketName("public-samples"), null);
   assert.ok(validateBucketName("A"));
   assert.ok(validateBucketName("bad_name"));
+});
+
+test("S3 prefix listing includes an object whose name equals the prefix", () => {
+  const page = groupListing([{ key: "exact" }, { key: "exact/more" }], {
+    prefix: "exact",
+    delimiter: "",
+    maxKeys: 1000,
+    rawCapped: false,
+  });
+  assert.deepEqual(
+    page.contents.map((row) => row.key),
+    ["exact", "exact/more"],
+  );
 });
