@@ -626,7 +626,7 @@ function PreviewBody({ object, url, text }: { object: Detail; url: string; text:
   if (type.startsWith("image/")) return <img src={url} alt="" className="max-h-96 w-full rounded-md object-contain" />;
   if (type.startsWith("video/")) return <video src={url} controls className="w-full rounded-md" />;
   if (type.startsWith("audio/")) return <audio src={url} controls className="w-full" />;
-  if (type === "application/pdf") return <iframe title={object.key} src={url} className="h-96 w-full rounded-md border border-border" />;
+  if (type === "application/pdf") return <iframe sandbox="" title={object.key} src={url} className="h-96 w-full rounded-md border border-border" />;
   if (text) return <pre className="max-h-96 overflow-auto rounded-md bg-bg p-3 font-mono text-xs">{text}</pre>;
   return <p className="text-sm text-muted">No inline preview for this file. Download it instead.</p>;
 }

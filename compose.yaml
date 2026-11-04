@@ -2,7 +2,7 @@ services:
   middleout:
     build: .
     ports:
-      - "${PORT:-8080}:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
     environment:
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8080}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}

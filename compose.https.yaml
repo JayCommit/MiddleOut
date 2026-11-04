@@ -1,0 +1,16 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      MIDDLEOUT_DOMAIN: ${MIDDLEOUT_DOMAIN:?Set MIDDLEOUT_DOMAIN to your public DNS name}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - middleout
+volumes:
+  caddy-data:
+  caddy-config:

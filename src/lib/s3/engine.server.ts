@@ -1,3 +1,5 @@
+import { objectResponseHeaders } from "../storage/response-headers.ts";
+import { BodyTooLarge, readBoundedBody, transportAddress } from "./body.ts";
 import {
   abortMultipartUpload,
   authenticateAccessKey,
@@ -27,7 +29,7 @@ import {
   setTags,
   uploadMultipartPart,
 } from "../storage/queries.server.ts";
-import { crc32Base64, decodeAwsChunked, parseAuthorization, verifySigV4 } from "./sigv4.ts";
+import { crc32Base64, parseAuthorization, verifySigV4 } from "./sigv4.ts";
 import {
   completeMultipartUploadXml,
   initiateMultipartUploadXml,
@@ -142,7 +144,7 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
 
   // Rate limiting check
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "client";
+  const ip = transportAddress(request);
   const rateLimit = checkRateLimit(`s3:${ip}`, 180, 30);
   if (!rateLimit.allowed) {
     const res = xmlError(429, "SlowDown", "Please reduce your request rate.");
@@ -150,13 +152,32 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     return withCors(res);
   }
 
-  const length = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(length) && length > MAX_BODY) {
-    return withCors(xmlError(413, "EntityTooLarge", "The object is larger than 8 MB."));
+  const declared = request.headers.get("x-amz-content-sha256") || "";
+  const encoding = request.headers.get("content-encoding") || "";
+  if (
+    declared.toUpperCase().startsWith("STREAMING-") ||
+    /(?:^|,)\s*aws-chunked\s*(?:,|$)/i.test(encoding)
+  ) {
+    return withCors(
+      xmlError(
+        501,
+        "NotImplemented",
+        "Streaming payload signatures and aws-chunked uploads are unsupported. Use a single PUT or multipart upload.",
+      ),
+    );
   }
-  let body = Buffer.from(await request.arrayBuffer());
-  if (body.length > MAX_BODY)
-    return withCors(xmlError(413, "EntityTooLarge", "The object is larger than 8 MB."));
+  let body: Buffer;
+  try {
+    body = await readBoundedBody(request, MAX_BODY);
+  } catch (error) {
+    if (
+      error instanceof BodyTooLarge ||
+      (error as { status?: number; statusCode?: number }).status === 413 ||
+      (error as { statusCode?: number }).statusCode === 413
+    )
+      return withCors(xmlError(413, "EntityTooLarge", "Request body exceeds 12 MiB."));
+    return withCors(xmlError(400, "InvalidRequest", "Could not read the request body."));
+  }
 
   const mo = request.headers.get("authorization") ?? "";
   let ownerId: string | null = null;
@@ -191,16 +212,6 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     }
   }
 
-  const declared = request.headers.get("x-amz-content-sha256") ?? "";
-  const encoding = request.headers.get("content-encoding") ?? "";
-  if (declared.startsWith("STREAMING-") || encoding.includes("aws-chunked")) {
-    try {
-      body = Buffer.from(decodeAwsChunked(body));
-    } catch {
-      return withCors(xmlError(400, "InvalidRequest", "Could not read the chunked upload body."));
-    }
-  }
-
   const url = new URL(request.url);
   const { bucket, key } = splitPath(url.pathname);
   const method = request.method.toUpperCase();
@@ -232,7 +243,10 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     }
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const buckets = await listOwnedBuckets(ownerId);
-    const xml = listBucketsXml(buckets, ownerId);
+    const xml = listBucketsXml(
+      keyBucketScope ? buckets.filter((entry) => entry.name === keyBucketScope) : buckets,
+      ownerId,
+    );
     return withCors(xmlResponse(200, method === "HEAD" ? "" : xml));
   }
 
@@ -641,6 +655,9 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     const slash = decoded.indexOf("/");
     if (slash <= 0)
       return withCors(xmlError(400, "InvalidArgument", "x-amz-copy-source is invalid."));
+    if (keyBucketScope && decoded.slice(0, slash) !== keyBucketScope) {
+      return withCors(xmlError(403, "AccessDenied", "Access key cannot read the source bucket."));
+    }
     const copied = await copyObject(
       ownerId,
       decoded.slice(0, slash),
@@ -712,7 +729,12 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     // Conditional headers: ETag
     const inm = request.headers.get("if-none-match");
     if (inm && (inm === "*" || inm === quoted || inm === object.etag)) {
-      return withCors(new Response(null, { status: 304, headers: { etag: quoted } }));
+      return withCors(
+        new Response(null, {
+          status: 304,
+          headers: objectResponseHeaders(new Headers({ etag: quoted }), key),
+        }),
+      );
     }
     const im = request.headers.get("if-match");
     if (im && im !== "*" && im !== quoted && im !== object.etag) {
@@ -731,7 +753,12 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (ims) {
       const imsTime = Date.parse(ims);
       if (!Number.isNaN(imsTime) && objectTime <= imsTime) {
-        return withCors(new Response(null, { status: 304, headers: { etag: quoted } }));
+        return withCors(
+          new Response(null, {
+            status: 304,
+            headers: objectResponseHeaders(new Headers({ etag: quoted }), key),
+          }),
+        );
       }
     }
     const iums = request.headers.get("if-unmodified-since");
@@ -771,6 +798,7 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     });
     if (range) headers.set("content-range", `bytes ${start}-${end}/${object.bytes.length}`);
     for (const [name, value] of Object.entries(object.headers)) headers.set(name, value);
+    objectResponseHeaders(headers, key);
     return withCors(
       new Response(method === "HEAD" ? null : new Uint8Array(slice), {
         status: range ? 206 : 200,

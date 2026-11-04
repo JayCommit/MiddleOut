@@ -20,7 +20,7 @@ function authSecret(): string {
     throw new Error("BETTER_AUTH_SECRET is required with DATABASE_URL.");
   if (process.env.DATA_DIR === ":memory:") return randomBytes(32).toString("hex");
   const directory = resolve(process.env.DATA_DIR || "data");
-  mkdirSync(directory, { recursive: true });
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, "auth-secret");
   try {
     writeFileSync(path, randomBytes(32).toString("hex"), { flag: "wx", mode: 0o600 });

@@ -1,3 +1,4 @@
+import { objectResponseHeaders } from "@/lib/storage/response-headers";
 import { createFileRoute } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/api/public/$bucket/$")({
@@ -16,7 +17,7 @@ export const Route = createFileRoute("/api/public/$bucket/$")({
           etag: `"${object.etag}"`,
           "cache-control": "public, max-age=60",
         });
-        if (download) headers.set("content-disposition", `attachment; filename="${leaf(object.key)}"`);
+        objectResponseHeaders(headers, object.key, download);
         return new Response(new Uint8Array(object.bytes), { headers });
       },
     },
@@ -34,9 +35,4 @@ function decodeKey(splat: string) {
       }
     })
     .join("/");
-}
-
-function leaf(key: string) {
-  const parts = key.split("/").filter(Boolean);
-  return (parts[parts.length - 1] ?? "download").replace(/"/g, "");
 }

@@ -11,3 +11,6 @@ artifacts
 screenshots
 
 dist
+
+.venv
+.github

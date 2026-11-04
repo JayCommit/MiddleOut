@@ -247,7 +247,7 @@ test("move rolls back source deletion and destination creation when a later step
   await q.putBytes(owner, bucket, "source", Buffer.from("keep"), "text/plain", {});
   const sql = await getSql();
   await sql.query(
-    "alter table mo_audit add constraint regression_move_fail check (action <> 'object.move')",
+    "alter table mo_audit add constraint regression_move_fail check (action <> 'object.move' or owner_id <> 'regression-move-failure')",
   );
   try {
     await assert.rejects(q.moveObject(owner, bucket, "source", "destination"));
@@ -257,4 +257,18 @@ test("move rolls back source deletion and destination creation when a later step
   } finally {
     await sql.query("alter table mo_audit drop constraint regression_move_fail");
   }
+});
+
+test("console and public folder browsers hide their own folder marker", async () => {
+  const { owner, bucket } = await fixture("folder-marker");
+  await q.putBytes(owner, bucket, "new/", Buffer.alloc(0), "application/octet-stream", {});
+  const consolePage = await q.browse(owner, bucket, "new/");
+  assert.ok(consolePage.ok);
+  assert.deepEqual(consolePage.objects, []);
+  const publicPage = await q.publicListing(bucket, "new/");
+  assert.ok(publicPage.available);
+  assert.deepEqual(publicPage.objects, []);
+  const s3Page = await q.listForS3(owner, bucket, "new/", "", 1000, "");
+  assert.ok(!("error" in s3Page));
+  assert.equal(s3Page.contents[0].key, "new/");
 });

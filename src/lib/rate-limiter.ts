@@ -21,6 +21,9 @@ export function checkRateLimit(
   let state = buckets.get(key);
 
   if (!state) {
+    // Bound cardinality under distributed abuse; new clients share overflow capacity.
+    if (buckets.size >= 10000 && key !== "overflow")
+      return checkRateLimit("overflow", maxTokens, refillRatePerSec);
     state = { tokens: maxTokens - 1, lastRefill: now };
     buckets.set(key, state);
     return { allowed: true, retryAfter: 0 };
