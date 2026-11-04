@@ -1,7 +1,6 @@
 /** @param {string} name @param {number} fallback @param {number} min @param {number} max */
 export function integerSetting(name, fallback, min, max) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
+  const raw = process.env[name] || String(fallback);
   if (
     !/^\d+$/.test(raw) ||
     !Number.isSafeInteger(Number(raw)) ||
