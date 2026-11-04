@@ -41,7 +41,6 @@ type Detail = Extract<Awaited<ReturnType<typeof objectDetailFn>>, { ok: true }>[
 function BrowserPage() {
   const { name } = Route.useParams();
   const { prefix } = Route.useSearch();
-  const navigate = Route.useNavigate();
   const [prefixDraft, setPrefixDraft] = useState(prefix);
   useEffect(() => setPrefixDraft(prefix), [prefix]);
   const navigate = Route.useNavigate();
