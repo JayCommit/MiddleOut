@@ -1,6 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 
+function asStr(v: unknown, maxLen = 1024): string {
+  return typeof v === "string" ? v.slice(0, maxLen) : "";
+}
+
 export const fetchOverview = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
@@ -10,34 +14,43 @@ export const fetchOverview = createServerFn({ method: "GET" })
 
 export const createBucketFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { name: string; isPublic: boolean }) => input)
+  .validator((input: { name: string; isPublic: boolean }) => ({
+    name: asStr(input?.name, 128),
+    isPublic: Boolean(input?.isPublic),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.createBucket(context.userId, data.name, Boolean(data.isPublic));
+    return q.createBucket(context.userId, data.name, data.isPublic);
   });
 
 export const setBucketAccessFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { name: string; isPublic: boolean }) => input)
+  .validator((input: { name: string; isPublic: boolean }) => ({
+    name: asStr(input?.name, 128),
+    isPublic: Boolean(input?.isPublic),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.setBucketAccess(context.userId, data.name, Boolean(data.isPublic));
+    return q.setBucketAccess(context.userId, data.name, data.isPublic);
   });
 
 export const deleteBucketFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { name: string; force: boolean }) => input)
+  .validator((input: { name: string; force: boolean }) => ({
+    name: asStr(input?.name, 128),
+    force: Boolean(input?.force),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.deleteBucket(context.userId, data.name, Boolean(data.force));
+    return q.deleteBucket(context.userId, data.name, data.force);
   });
 
 export const browseFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { bucket: string; prefix: string; startAfter?: string }) => ({
-    bucket: input.bucket,
-    prefix: input.prefix ?? "",
-    startAfter: input.startAfter ?? "",
+    bucket: asStr(input?.bucket, 128),
+    prefix: asStr(input?.prefix, 1024),
+    startAfter: asStr(input?.startAfter, 1024),
   }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
@@ -46,7 +59,12 @@ export const browseFn = createServerFn({ method: "POST" })
 
 export const beginUploadFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string; key: string; size: number; contentType: string }) => input)
+  .validator((input: { bucket: string; key: string; size: number; contentType: string }) => ({
+    bucket: asStr(input?.bucket, 128),
+    key: asStr(input?.key, 1025),
+    size: typeof input?.size === "number" ? input.size : -1,
+    contentType: asStr(input?.contentType, 256),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.beginUpload(context.userId, data);
@@ -54,7 +72,11 @@ export const beginUploadFn = createServerFn({ method: "POST" })
 
 export const writePartFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { objectId: string; part: number; data: string }) => input)
+  .validator((input: { objectId: string; part: number; data: string }) => ({
+    objectId: asStr(input?.objectId, 128),
+    part: typeof input?.part === "number" ? input.part : -1,
+    data: typeof input?.data === "string" ? input.data : "",
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.writePart(context.userId, data.objectId, data.part, data.data);
@@ -62,7 +84,9 @@ export const writePartFn = createServerFn({ method: "POST" })
 
 export const finishUploadFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { objectId: string }) => input)
+  .validator((input: { objectId: string }) => ({
+    objectId: asStr(input?.objectId, 128),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.finishUpload(context.userId, data.objectId);
@@ -70,7 +94,9 @@ export const finishUploadFn = createServerFn({ method: "POST" })
 
 export const abortUploadFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { objectId: string }) => input)
+  .validator((input: { objectId: string }) => ({
+    objectId: asStr(input?.objectId, 128),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.abortUpload(context.userId, data.objectId);
@@ -78,7 +104,10 @@ export const abortUploadFn = createServerFn({ method: "POST" })
 
 export const removeObjectFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string; key: string }) => input)
+  .validator((input: { bucket: string; key: string }) => ({
+    bucket: asStr(input?.bucket, 128),
+    key: asStr(input?.key, 1025),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.removeObject(context.userId, data.bucket, data.key);
@@ -86,7 +115,12 @@ export const removeObjectFn = createServerFn({ method: "POST" })
 
 export const batchDeleteFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string; keys: string[] }) => input)
+  .validator((input: { bucket: string; keys: string[] }) => ({
+    bucket: asStr(input?.bucket, 128),
+    keys: Array.isArray(input?.keys)
+      ? input.keys.slice(0, 1001).map((k) => asStr(k, 1025))
+      : [],
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.batchDeleteObjects(context.userId, data.bucket, data.keys);
@@ -94,7 +128,11 @@ export const batchDeleteFn = createServerFn({ method: "POST" })
 
 export const moveObjectFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string; sourceKey: string; destKey: string }) => input)
+  .validator((input: { bucket: string; sourceKey: string; destKey: string }) => ({
+    bucket: asStr(input?.bucket, 128),
+    sourceKey: asStr(input?.sourceKey, 1025),
+    destKey: asStr(input?.destKey, 1025),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.moveObject(context.userId, data.bucket, data.sourceKey, data.destKey);
@@ -102,7 +140,10 @@ export const moveObjectFn = createServerFn({ method: "POST" })
 
 export const objectDetailFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string; key: string }) => input)
+  .validator((input: { bucket: string; key: string }) => ({
+    bucket: asStr(input?.bucket, 128),
+    key: asStr(input?.key, 1025),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.objectDetail(context.userId, data.bucket, data.key);
@@ -110,7 +151,10 @@ export const objectDetailFn = createServerFn({ method: "POST" })
 
 export const readPartFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { objectId: string; part: number }) => input)
+  .validator((input: { objectId: string; part: number }) => ({
+    objectId: asStr(input?.objectId, 128),
+    part: typeof input?.part === "number" ? input.part : -1,
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.readPartForOwner(context.userId, data.objectId, data.part);
@@ -119,11 +163,20 @@ export const readPartFn = createServerFn({ method: "POST" })
 export const setTagsFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
-    (input: { bucket: string; key: string; tags: { key: string; value: string }[] }) => input,
+    (input: { bucket: string; key: string; tags: { key: string; value: string }[] }) => ({
+      bucket: asStr(input?.bucket, 128),
+      key: asStr(input?.key, 1025),
+      tags: Array.isArray(input?.tags)
+        ? input.tags.slice(0, 11).map((t) => ({
+            key: asStr(t?.key, 64),
+            value: asStr(t?.value, 128),
+          }))
+        : [],
+    }),
   )
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.setTags(context.userId, data.bucket, data.key, data.tags ?? []);
+    return q.setTags(context.userId, data.bucket, data.key, data.tags);
   });
 
 export const listKeysFn = createServerFn({ method: "GET" })
@@ -136,22 +189,29 @@ export const listKeysFn = createServerFn({ method: "GET" })
 export const createKeyFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
-    (input: { label: string; permission?: "full" | "read-only"; bucketScope?: string | null }) =>
-      input,
+    (input: { label: string; permission?: "full" | "read-only"; bucketScope?: string | null }) => ({
+      label: asStr(input?.label, 64),
+      permission: (input?.permission === "read-only" ? "read-only" : "full") as
+        | "full"
+        | "read-only",
+      bucketScope: input?.bucketScope ? asStr(input.bucketScope, 128) : null,
+    }),
   )
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.createKey(
       context.userId,
-      data.label ?? "",
-      data.permission ?? "full",
-      data.bucketScope ?? null,
+      data.label,
+      data.permission,
+      data.bucketScope,
     );
   });
 
 export const revokeKeyFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { id: string }) => input)
+  .validator((input: { id: string }) => ({
+    id: asStr(input?.id, 128),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.revokeKey(context.userId, data.id);
@@ -160,8 +220,8 @@ export const revokeKeyFn = createServerFn({ method: "POST" })
 export const listAuditFn = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .validator((input: { offset?: number; search?: string } = {}) => ({
-    search: typeof input.search === "string" ? input.search.slice(0, 200) : "",
-    offset: Number.isSafeInteger(input.offset) && input.offset! >= 0 ? input.offset! : 0,
+    search: typeof input?.search === "string" ? input.search.slice(0, 200) : "",
+    offset: Number.isSafeInteger(input?.offset) && input.offset! >= 0 ? input.offset! : 0,
   }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
@@ -177,7 +237,9 @@ export const settingsFn = createServerFn({ method: "GET" })
 
 export const setRegionFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { region: string }) => input)
+  .validator((input: { region: string }) => ({
+    region: asStr(input?.region, 64),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.setRegion(context.userId, data.region);
@@ -185,7 +247,11 @@ export const setRegionFn = createServerFn({ method: "POST" })
 
 export const createLinkFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string; key: string; seconds: number }) => input)
+  .validator((input: { bucket: string; key: string; seconds: number }) => ({
+    bucket: asStr(input?.bucket, 128),
+    key: asStr(input?.key, 1025),
+    seconds: typeof input?.seconds === "number" ? input.seconds : -1,
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.createLink(context.userId, data.bucket, data.key, data.seconds);
@@ -200,7 +266,9 @@ export const listSharesFn = createServerFn({ method: "GET" })
 
 export const revokeShareFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { token: string }) => input)
+  .validator((input: { token: string }) => ({
+    token: asStr(input?.token, 128),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.revokeShare(context.userId, data.token);
@@ -208,18 +276,22 @@ export const revokeShareFn = createServerFn({ method: "POST" })
 
 export const publicListingFn = createServerFn({ method: "POST" })
   .validator((input: { bucket: string; prefix: string; startAfter?: string }) => ({
-    bucket: input.bucket,
-    prefix: input.prefix ?? "",
-    startAfter: input.startAfter ?? "",
+    bucket: asStr(input?.bucket, 128),
+    prefix: asStr(input?.prefix, 1024),
+    startAfter: asStr(input?.startAfter, 1024),
   }))
   .handler(async ({ data }) => {
+    const { assertSameSiteRequest } = await import("@/lib/auth/isolation.server");
+    assertSameSiteRequest();
     const q = await import("./queries.server");
     return q.publicListing(data.bucket, data.prefix, data.startAfter);
   });
 
 export const accessHintFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { bucket: string }) => input)
+  .validator((input: { bucket: string }) => ({
+    bucket: asStr(input?.bucket, 128),
+  }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.accessHint(context.userId, data.bucket);

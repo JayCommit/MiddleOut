@@ -1,6 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { authClient } from "@/lib/auth/client";
 
+/** Only same-origin paths; browsers treat `/\host` like `//host`. */
+function safeCallback(value: string): string {
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/";
+  try {
+    const resolved = new URL(value, window.location.origin);
+    if (resolved.origin !== window.location.origin) return "/";
+    return resolved.pathname + resolved.search + resolved.hash;
+  } catch {
+    return "/";
+  }
+}
+
 export function SignInPanel({ callbackURL = "/" }: { callbackURL?: string }) {
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
   useEffect(() => {
@@ -31,9 +43,7 @@ export function SignInPanel({ callbackURL = "/" }: { callbackURL?: string }) {
         );
         return;
       }
-      window.location.assign(
-        callbackURL.startsWith("/") && !callbackURL.startsWith("//") ? callbackURL : "/",
-      );
+      window.location.assign(safeCallback(callbackURL));
     } catch {
       setError("Unable to connect. Please try again.");
     } finally {

@@ -25,11 +25,23 @@ export async function readBoundedBody(request: Request, limit: number): Promise<
   }
 }
 
-/** srvx derives ip from the transport; callers cannot select it via headers. */
+/**
+ * Client address for rate limiting. srvx derives it from the transport, so
+ * callers cannot select it via headers. Behind a reverse proxy every request
+ * shares the proxy's address; set TRUST_PROXY=true only when the node is
+ * reachable exclusively through a proxy that appends X-Forwarded-For (the
+ * bundled Caddy overlay does). The right-most entry is the one added by that
+ * proxy, so client-supplied entries to its left are ignored.
+ */
 export function transportAddress(request: Request): string {
   const transport = request as Request & {
     ip?: string;
     runtime?: { node?: { req?: { socket?: { remoteAddress?: string } } } };
   };
+  if (process.env.TRUST_PROXY === "true") {
+    const forwarded = request.headers.get("x-forwarded-for");
+    const last = forwarded?.split(",").pop()?.trim();
+    if (last) return last;
+  }
   return transport.runtime?.node?.req?.socket?.remoteAddress || transport.ip || "unknown";
 }

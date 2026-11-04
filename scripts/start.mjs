@@ -45,12 +45,32 @@ const server = serve({
   maxRequestBodySize: maxRequestBytes,
   trustProxy: false,
   port: Number(process.env.PORT),
-  middleware: [serveStatic({ dir: fileURLToPath(new URL("../dist/client", import.meta.url)) })],
+  middleware: [
+    async (request, next) => {
+      const response = await next();
+      if (response?.headers) {
+        if (!response.headers.has("x-content-type-options"))
+          response.headers.set("x-content-type-options", "nosniff");
+        if (!response.headers.has("referrer-policy"))
+          response.headers.set("referrer-policy", "no-referrer");
+        if (!response.headers.has("x-frame-options"))
+          response.headers.set("x-frame-options", "DENY");
+      }
+      return response;
+    },
+    serveStatic({ dir: fileURLToPath(new URL("../dist/client", import.meta.url)) }),
+  ],
   fetch: async (request) => {
     const id = randomUUID();
     try {
       const response = await app.fetch(request);
       response.headers.set("x-request-id", id);
+      if (!response.headers.has("x-content-type-options"))
+        response.headers.set("x-content-type-options", "nosniff");
+      if (!response.headers.has("referrer-policy"))
+        response.headers.set("referrer-policy", "no-referrer");
+      if (!response.headers.has("x-frame-options"))
+        response.headers.set("x-frame-options", "DENY");
       if (response.status >= 500)
         console.error(
           JSON.stringify({

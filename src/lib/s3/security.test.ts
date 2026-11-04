@@ -182,3 +182,192 @@ test("raw bucket CORS configuration cannot escape the S3 response sandbox", asyn
   assert.match(response.headers.get("content-security-policy")!, /^sandbox;/);
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
 });
+
+test("stored object headers cannot overwrite content-type or inject arbitrary response headers", async () => {
+  await q.createBucket("security-hdrs", "security-hdrs", true);
+  await q.putBytes(
+    "security-hdrs",
+    "security-hdrs",
+    "disguised.bin",
+    Buffer.from("<script>alert(1)</script>"),
+    "text/html",
+    {
+      "content-type": "image/png",
+      "set-cookie": "session=hijacked",
+      "x-amz-meta-valid": "kept",
+      "x-amz-meta-bad": "line1\r\nline2",
+    },
+  );
+  const res = await handleS3(new Request("http://localhost/api/s3/security-hdrs/disguised.bin"));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "text/html");
+  assert.equal(res.headers.get("set-cookie"), null);
+  assert.equal(res.headers.get("x-amz-meta-valid"), "kept");
+  assert.equal(res.headers.get("x-amz-meta-bad"), null);
+  assert.match(res.headers.get("content-disposition")!, /^attachment;/);
+});
+
+test("active file extensions force attachment disposition even with passive content-type", () => {
+  for (const name of ["exploit.html", "vector.svg", "worker.js", "doc.xhtml"]) {
+    const headers = objectResponseHeaders(
+      new Headers({ "content-type": "application/octet-stream" }),
+      name,
+    );
+    assert.match(headers.get("content-disposition")!, /^attachment;/);
+  }
+});
+
+test("object tags on public buckets are private to the owner and duplicate tag keys fail atomically", async () => {
+  await q.createBucket("security-tags", "security-tags", true);
+  await q.putBytes(
+    "security-tags",
+    "security-tags",
+    "doc.txt",
+    Buffer.from("hello"),
+    "text/plain",
+    {},
+  );
+  assert.equal(
+    (await q.setTags("security-tags", "security-tags", "doc.txt", [{ key: "env", value: "prod" }]))
+      .ok,
+    true,
+  );
+  // Anonymous GET ?tagging on public bucket must be denied
+  const anon = await handleS3(
+    new Request("http://localhost/api/s3/security-tags/doc.txt?tagging"),
+  );
+  assert.equal(anon.status, 403);
+  // Duplicate tag keys must be rejected without wiping existing tags
+  const dup = await q.setTags("security-tags", "security-tags", "doc.txt", [
+    { key: "dup", value: "1" },
+    { key: "dup", value: "2" },
+  ]);
+  assert.equal(dup.ok, false);
+  const retained = await q.getObjectTags("security-tags", "security-tags", "doc.txt");
+  assert.ok(retained.ok);
+  assert.deepEqual(retained.tags, [{ key: "env", value: "prod" }]);
+});
+
+test("malformed auth headers, unsigned host, and duplicate presigned parameters are rejected", async () => {
+  await q.createBucket("security-auth", "security-auth", true);
+  // Unrecognized Authorization header must not silently fall back to anonymous
+  const badHeader = await handleS3(
+    new Request("http://localhost/api/s3/security-auth", {
+      headers: { authorization: "Bearer some-token" },
+    }),
+  );
+  assert.equal(badHeader.status, 400);
+
+  // Simultaneous Authorization header (AWS4 or MO) and presigned URL parameters must be rejected
+  const bothAuthAws = await handleS3(
+    new Request(
+      "http://localhost/api/s3/security-auth?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=a%2F20261104%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261104T120000Z&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=" +
+        "a".repeat(64),
+      {
+        headers: {
+          authorization:
+            "AWS4-HMAC-SHA256 Credential=a/20261104/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=" +
+            "b".repeat(64),
+        },
+      },
+    ),
+  );
+  assert.equal(bothAuthAws.status, 400);
+
+  const bothAuthMo = await handleS3(
+    new Request(
+      "http://localhost/api/s3/security-auth?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=a%2F20261104%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261104T120000Z&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=" +
+        "a".repeat(64),
+      {
+        headers: {
+          authorization: "MO testkey:testsecret",
+        },
+      },
+    ),
+  );
+  assert.equal(bothAuthMo.status, 400);
+
+  // Duplicate presigned parameters must be rejected
+  const dupPresign = await handleS3(
+    new Request(
+      "http://localhost/api/s3/security-auth?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=a%2F20261104%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261104T120000Z&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=" +
+        "a".repeat(64) +
+        "&x-amz-signature=" +
+        "b".repeat(64),
+    ),
+  );
+  assert.equal(dupPresign.status, 400);
+
+  // SigV4 without host in signedHeaders must fail
+  const noHost = verifySigV4({
+    request: new Request("http://localhost/"),
+    body: Buffer.alloc(0),
+    secret: "test",
+    now: Date.parse("2026-11-04T12:00:00Z"),
+    parsed: {
+      accessKeyId: "test",
+      dateStamp: "20261104",
+      region: "us-east-1",
+      service: "s3",
+      signedHeaders: ["x-amz-date"],
+      signature: "0".repeat(64),
+      amzDate: "20261104T120000Z",
+      expiresSec: null,
+      presigned: false,
+    },
+  });
+  assert.equal(noHost.ok, false);
+});
+
+test("XML unescaping does not double-unescape entities in batch delete or tagging", async () => {
+  await q.createBucket("security-xml", "security-xml", false);
+  const key = await q.createKey("security-xml", "xml");
+  assert.ok(key.ok);
+  const headers = { authorization: `MO ${key.accessKeyId}:${key.secretKey}` };
+  await q.putBytes(
+    "security-xml",
+    "security-xml",
+    "literal-&lt;-key",
+    Buffer.from("1"),
+    "text/plain",
+    {},
+  );
+  await q.putBytes(
+    "security-xml",
+    "security-xml",
+    "literal-<-key",
+    Buffer.from("2"),
+    "text/plain",
+    {},
+  );
+  const delRes = await handleS3(
+    new Request("http://localhost/api/s3/security-xml?delete", {
+      method: "POST",
+      headers,
+      body: "<Delete><Object><Key>literal-&amp;lt;-key</Key></Object></Delete>",
+    }),
+  );
+  assert.equal(delRes.status, 200);
+  // literal-&lt;-key was deleted, while literal-<-key remains intact
+  assert.ok("error" in (await q.readObjectFor("security-xml", "security-xml", "literal-&lt;-key")));
+  assert.ok("object" in (await q.readObjectFor("security-xml", "security-xml", "literal-<-key")));
+});
+
+test("rate limiter isolates overflow buckets per prefix namespace", async () => {
+  const { checkRateLimit } = await import("../rate-limiter.ts");
+  // Fill up with dummy keys to trigger cardinality cap
+  for (let i = 0; i < 10001; i++) {
+    checkRateLimit(`dummy:${i}`, 10, 10);
+  }
+  // S3 overflow exhaustion should not exhaust auth overflow
+  for (let i = 0; i < 15; i++) {
+    checkRateLimit(`s3:newip_${i}`, 5, 1);
+  }
+  // s3 overflow is now depleted
+  const s3Result = checkRateLimit("s3:overflow_test", 5, 1);
+  assert.equal(s3Result.allowed, false);
+
+  // But auth overflow should still have tokens
+  const authResult = checkRateLimit("auth:fresh_ip", 5, 1);
+  assert.equal(authResult.allowed, true);
+});

@@ -164,25 +164,26 @@ function BrowserPage() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl("");
     if (detail.object.size === 0) return;
-    if (data?.bucket.isPublic) {
+    const type = (detail.object.contentType || guessType(detail.object.key))
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+    const isSafeMedia =
+      SAFE_IMAGE_TYPES.has(type) || type.startsWith("video/") || type.startsWith("audio/");
+    if (data?.bucket.isPublic && isSafeMedia) {
       setPreviewUrl(withBase(`/api/public/${encodeURIComponent(name)}/${encodeKeyPath(key)}`));
       return;
     }
-    const blob = await downloadObject(detail.object.id, detail.object.partCount);
-    const url = URL.createObjectURL(blob);
-    setPreviewUrl(url);
+    const blob = await downloadObject(detail.object.id, detail.object.partCount, type);
+    if (isSafeMedia) {
+      const url = URL.createObjectURL(blob);
+      setPreviewUrl(url);
+    }
     if (
-      detail.object.contentType.startsWith("text/") ||
-      detail.object.contentType.includes("json") ||
-      detail.object.size < 100_000
+      detail.object.size < 100_000 &&
+      (type.startsWith("text/") || type.includes("json") || type.includes("xml"))
     ) {
-      if (
-        detail.object.contentType.startsWith("text/") ||
-        detail.object.contentType.includes("json") ||
-        detail.object.contentType.includes("xml")
-      ) {
-        setPreviewText(await blob.text());
-      }
+      setPreviewText(await blob.text());
     }
   }
 
@@ -755,7 +756,11 @@ async function downloadKey(bucket: string, key: string, isPublic: boolean) {
     toast.error(detail.error);
     return;
   }
-  const blob = await downloadObject(detail.object.id, detail.object.partCount);
+  const blob = await downloadObject(
+    detail.object.id,
+    detail.object.partCount,
+    detail.object.contentType,
+  );
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -764,23 +769,31 @@ async function downloadKey(bucket: string, key: string, isPublic: boolean) {
   URL.revokeObjectURL(url);
 }
 
+const SAFE_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+  "image/x-icon",
+]);
+
 function PreviewBody({ object, url, text }: { object: Detail; url: string; text: string }) {
-  if (!url && object.size > 0) return <p className="text-sm text-muted">Preparing preview…</p>;
-  const type = object.contentType || guessType(object.key);
+  const type = (object.contentType || guessType(object.key)).split(";", 1)[0].trim().toLowerCase();
   if (object.size === 0) return <p className="text-sm text-muted">Empty object.</p>;
-  if (type.startsWith("image/"))
+  if (SAFE_IMAGE_TYPES.has(type)) {
+    if (!url) return <p className="text-sm text-muted">Preparing preview…</p>;
     return <img src={url} alt="" className="max-h-96 w-full rounded-md object-contain" />;
-  if (type.startsWith("video/")) return <video src={url} controls className="w-full rounded-md" />;
-  if (type.startsWith("audio/")) return <audio src={url} controls className="w-full" />;
-  if (type === "application/pdf")
-    return (
-      <iframe
-        sandbox=""
-        title={object.key}
-        src={url}
-        className="h-96 w-full rounded-md border border-border"
-      />
-    );
+  }
+  if (type.startsWith("video/")) {
+    if (!url) return <p className="text-sm text-muted">Preparing preview…</p>;
+    return <video src={url} controls className="w-full rounded-md" />;
+  }
+  if (type.startsWith("audio/")) {
+    if (!url) return <p className="text-sm text-muted">Preparing preview…</p>;
+    return <audio src={url} controls className="w-full" />;
+  }
   if (text)
     return (
       <pre className="max-h-96 overflow-auto rounded-md bg-bg p-3 font-mono text-xs">{text}</pre>
