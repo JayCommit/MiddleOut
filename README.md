@@ -36,11 +36,19 @@ Run on any machine with Node 22+ or Docker. No hosted control plane, auth broker
 ```bash
 cp .env.example .env
 # Set BETTER_AUTH_URL to the origin users will visit, including scheme/port.
-# Set ALLOW_SIGN_UP=true temporarily to create your account.
+# The initial administrator is generated automatically.
 docker compose up -d --build
 ```
 
-Open your configured URL (default `http://localhost:8080`), choose **Create an account**, and register with a password of at least 12 characters. Then set `ALLOW_SIGN_UP=false` and run `docker compose up -d` again. Existing users can still sign in. Registration is disabled by default; do not enable it on an unattended public node.
+On an empty node, startup creates `admin@middleout.local` with a random password. Retrieve it with:
+
+```bash
+docker compose logs middleout
+# Standalone container:
+docker logs <container-name>
+```
+
+Sign in at your configured URL. Credentials are printed only during initial creation; retain them securely and restrict access to container logs. Existing accounts are never replaced or reset on restart. Registration can remain disabled.
 
 Compose retains the database and generated authentication signing secret in the `middleout-data` volume. Replacing or restarting the container keeps them. Do not delete that volume unless you intend to delete the node's data. To use a standalone Docker container, build this Dockerfile, mount a persistent volume at `/app/data`, publish port 8080, and pass the same environment variables.
 
@@ -49,7 +57,7 @@ Compose retains the database and generated authentication signing secret in the 
 ```bash
 npm ci
 cp .env.example .env
-# Edit BETTER_AUTH_URL and temporarily enable ALLOW_SIGN_UP.
+# Edit BETTER_AUTH_URL; startup logs the generated administrator credentials.
 npm run build
 npm start
 ```

@@ -51,3 +51,7 @@ export const auth = betterAuth({
   advanced: { useSecureCookies: new URL(baseURL).protocol === "https:", cookiePrefix: "middleout" },
   plugins: [tanstackStartCookies()],
 });
+
+export const bootstrapReady = process.env.MIDDLEOUT_BOOTSTRAP === "true"
+  ? import("./bootstrap.server").then(({ bootstrapAdmin }) => bootstrapAdmin())
+  : Promise.resolve();

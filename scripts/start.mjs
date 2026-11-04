@@ -9,7 +9,10 @@ process.env.PORT ||= "8080";
 const { serve } = await import("srvx/node");
 const { serveStatic } = await import("srvx/static");
 const { fileURLToPath } = await import("node:url");
+process.env.MIDDLEOUT_BOOTSTRAP = "true";
 const { default: app } = await import("../dist/server/server.js");
+const initialized = await app.fetch(new Request(`${process.env.BETTER_AUTH_URL || "http://localhost:8080"}/api/auth/get-session`));
+if (!initialized.ok) throw new Error("Administrator initialization failed");
 const server = serve({
   hostname: process.env.HOST,
   maxRequestBodySize: 12 * 1024 * 1024,
