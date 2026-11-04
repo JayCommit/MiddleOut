@@ -48,3 +48,7 @@ Database migrations are forward-only. Rolling back an image is safe only when it
 ## Dependency triage
 
 Production dependencies must have zero reported audit findings. Development-only minimatch advisories currently propagate through ESLint tooling; upstream does not offer a compatible automatic fix. These tools process repository-controlled paths in CI and are removed from the runtime image by `npm prune --omit=dev`. Recheck this assessment on every dependency update. Do not suppress the production audit or force incompatible dependency overrides to make the report green.
+
+## Verify published images
+
+After the image is published, dispatch Release gates with `verify_version` set to its numeric version (for example `0.2.0`). The dedicated jobs pull anonymously from the registry on native amd64/arm64 runners, then test initial admin login, protected metrics, session persistence after a crash, graceful shutdown and the shipped password-recovery command. They do not rebuild the image. Retain these results with the release evidence.

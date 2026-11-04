@@ -10,6 +10,10 @@ on:
         description: Recover public archives for an already tested and published image tag
         type: string
         required: false
+      verify_version:
+        description: Verify an already published container version (for example 0.2.0)
+        type: string
+        required: false
 permissions:
   contents: read
 concurrency:
@@ -17,6 +21,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   verify:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     strategy:
       matrix:
         include:
@@ -40,6 +45,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:selfhost
   postgres:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     strategy:
       matrix:
         backend: [service17, local18]
@@ -73,6 +79,7 @@ jobs:
           restored=$(docker exec ${{ job.services.postgres.id }} psql -U test -d middleout_restore -Atc 'select count(*) from mo_parts')
           test "$original" = "$restored"
   clients:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -90,6 +97,7 @@ jobs:
       - run: npm run build
       - run: npm run test:clients
   containers:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     strategy:
       matrix:
         include:
@@ -194,7 +202,7 @@ jobs:
           sha=$(cat release-sha.txt)
           run=$(gh run list --workflow release.yml --event push --commit "$sha" --json databaseId,headBranch --jq ".[] | select(.headBranch == \"$RELEASE_TAG\") | .databaseId" | head -1)
           test -n "$run"
-          gh run view "$run" --json jobs --jq '[.jobs[] | select(.name != "publish" and .name != "recover-archives") | .conclusion] | length == 8 and all(. == "success")' | grep -qx true
+          gh run view "$run" --json jobs --jq '[.jobs[] | select(.name == "clients" or (.name | startswith("verify (")) or (.name | startswith("postgres (")) or (.name | startswith("containers ("))) | .conclusion] | length == 8 and all(. == "success")' | grep -qx true
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${RELEASE_TAG#v}"
           for arch in amd64 arm64; do
             docker pull --platform "linux/$arch" "$image"
@@ -210,3 +218,29 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" middleout-*.tar.gz SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false
+
+  verify-published-image:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_version != ''
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, architecture: amd64 }
+          - { runner: ubuntu-24.04-arm, architecture: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Pull and verify the published image
+        shell: bash
+        env:
+          VERSION: ${{ inputs.verify_version }}
+          EXPECTED_ARCH: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION"
+          docker pull "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$EXPECTED_ARCH"
+          TEST_IMAGE="$image" node scripts/test-docker.mjs
