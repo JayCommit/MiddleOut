@@ -5,6 +5,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      archive_tag:
+        description: Recover public archives for an already tested and published image tag
+        type: string
+        required: false
 permissions:
   contents: read
 concurrency:
@@ -152,8 +157,8 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}"
           for arch in amd64 arm64; do
             docker pull --platform "linux/$arch" "$image"
-            test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$arch"
-            docker save "$image" | gzip > "middleout-${GITHUB_REF_NAME}-linux-${arch}.tar.gz"
+            test "$(docker image inspect --platform "linux/$arch" --format '{{.Architecture}}' "$image")" = "$arch"
+            docker save --platform "linux/$arch" "$image" | gzip > "middleout-${GITHUB_REF_NAME}-linux-${arch}.tar.gz"
           done
           sha256sum middleout-*.tar.gz > SHA256SUMS
           if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > release-state.txt 2>/dev/null; then
@@ -163,3 +168,45 @@ jobs:
           fi
           gh release upload "$GITHUB_REF_NAME" middleout-*.tar.gz SHA256SUMS --clobber
           gh release edit "$GITHUB_REF_NAME" --draft=false
+  recover-archives:
+    if: github.event_name == 'workflow_dispatch' && inputs.archive_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Recover archives from a validated release image
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.archive_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha > release-sha.txt
+          sha=$(cat release-sha.txt)
+          run=$(gh run list --workflow release.yml --event push --commit "$sha" --json databaseId,headBranch --jq ".[] | select(.headBranch == \"$RELEASE_TAG\") | .databaseId" | head -1)
+          test -n "$run"
+          gh run view "$run" --json jobs --jq '[.jobs[] | select(.name != "publish") | .conclusion] | length == 8 and all(. == "success")' | grep -qx true
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${RELEASE_TAG#v}"
+          for arch in amd64 arm64; do
+            docker pull --platform "linux/$arch" "$image"
+            test "$(docker image inspect --platform "linux/$arch" --format '{{.Architecture}}' "$image")" = "$arch"
+            test "$(docker image inspect --platform "linux/$arch" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$sha"
+            docker save --platform "linux/$arch" "$image" | gzip > "middleout-${RELEASE_TAG}-linux-${arch}.tar.gz"
+          done
+          sha256sum middleout-*.tar.gz > SHA256SUMS
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > release-state.txt 2>/dev/null; then
+            test "$(cat release-state.txt)" = true
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Middle Out $RELEASE_TAG" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$RELEASE_TAG" middleout-*.tar.gz SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
