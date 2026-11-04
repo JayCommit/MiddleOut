@@ -21,6 +21,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   verify:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     strategy:
       matrix:
         include:
@@ -44,6 +45,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:selfhost
   postgres:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     strategy:
       matrix:
         backend: [service17, local18]
@@ -77,6 +79,7 @@ jobs:
           restored=$(docker exec ${{ job.services.postgres.id }} psql -U test -d middleout_restore -Atc 'select count(*) from mo_parts')
           test "$original" = "$restored"
   clients:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -94,6 +97,7 @@ jobs:
       - run: npm run build
       - run: npm run test:clients
   containers:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     strategy:
       matrix:
         include:
