@@ -21,7 +21,9 @@
     "test:clients": "node scripts/test-interop.mjs",
     "test:docker": "node scripts/test-docker.mjs",
     "backup": "node --env-file-if-exists=.env scripts/backup.mjs backup",
-    "restore": "node --env-file-if-exists=.env scripts/backup.mjs restore"
+    "restore": "node --env-file-if-exists=.env scripts/backup.mjs restore",
+    "admin:reset": "node --env-file-if-exists=.env scripts/start.mjs --reset-password",
+    "benchmark": "node --experimental-strip-types scripts/benchmark.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
@@ -104,6 +106,6 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT"
 }

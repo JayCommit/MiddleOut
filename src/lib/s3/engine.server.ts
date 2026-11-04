@@ -1,3 +1,4 @@
+import { maxRequestBytes } from "../../../scripts/runtime-config.mjs";
 import { objectResponseHeaders } from "../storage/response-headers.ts";
 import { BodyTooLarge, readBoundedBody, transportAddress } from "./body.ts";
 import {
@@ -46,7 +47,7 @@ import {
 } from "./xml.ts";
 import { checkRateLimit } from "../rate-limiter.ts";
 
-const MAX_BODY = 12 * 1024 * 1024;
+const MAX_BODY = maxRequestBytes;
 
 function splitPath(pathname: string): { bucket?: string; key?: string } {
   const marker = "/api/s3";

@@ -3,11 +3,19 @@ import { createFileRoute } from "@tanstack/react-router";
 export const Route = createFileRoute("/api/metrics")({
   server: {
     handlers: {
-      GET: async () => {
+      GET: async ({ request }) => {
+        const token = process.env.METRICS_TOKEN;
+        if (!token || token.length < 32) return new Response("Metrics disabled", { status: 404 });
+        const { timingSafeEqual } = await import("node:crypto");
+        const supplied = Buffer.from(request.headers.get("authorization") || "");
+        const expected = Buffer.from(`Bearer ${token}`);
+        if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
+          return new Response("Unauthorized", { status: 401 });
         try {
           const { getSystemMetrics } = await import("@/lib/storage/queries.server");
           const m = await getSystemMetrics();
-          const mem = typeof process !== "undefined" ? process.memoryUsage() : { rss: 0, heapUsed: 0 };
+          const mem =
+            typeof process !== "undefined" ? process.memoryUsage() : { rss: 0, heapUsed: 0 };
           const uptime = typeof process !== "undefined" ? Math.floor(process.uptime()) : 0;
 
           const lines = [

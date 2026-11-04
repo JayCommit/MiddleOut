@@ -27,6 +27,8 @@ Object bytes live in Postgres as base64 parts, next to the metadata. Region name
 
 Download the archive for your architecture and SHA256SUMS from [Releases](https://github.com/JayCommit/MiddleOut/releases), verify the checksum and load it with `docker load -i <archive>`. This works without a registry account. The image is tagged `ghcr.io/jaycommit/middleout:<version>`. A direct registry pull is also available when the package is public; GitHub defaults new registry packages to private independently of source-repository visibility.
 
+See [OPERATIONS.md](OPERATIONS.md) for password recovery, capacity configuration, metrics, scheduled maintenance, backup drills and upgrades.
+
 ## Self-hosting
 
 Run on any machine with Node 22+ or Docker. No hosted control plane, auth broker, or cloud account is required. Objects, accounts, and access keys stay in your database.
@@ -127,7 +129,7 @@ endpoint = https://your-host/api/s3
 force_path_style = true
 ```
 
-`GET /api/health` returns `{ "ok": true }` when the database answers. `GET /api/metrics` is the metrics endpoint.
+`GET /api/health` returns `{ "ok": true }` when the database answers. Metrics require an explicitly configured bearer token; see OPERATIONS.md.
 
 ## Internet deployment and recovery
 
@@ -161,7 +163,7 @@ For external Postgres, use a matching or newer `pg_dump` client to make a custom
 
 The release gates include backup/restore, old-schema upgrade, abrupt restart and constrained-filesystem tests. See [RELEASING.md](RELEASING.md) for the exact gates and the versioned container publication process. See [SECURITY.md](SECURITY.md) for reporting and security boundaries. The project is licensed under [MIT](LICENSE).
 
-Signed streaming payloads and aws-chunked encodings return HTTP 501. Use single PUT or multipart with `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The maximum object remains 8 MiB and the account quota remains 64 MiB; this is a small single-node object store.
+The limits above are defaults; configure them as described in OPERATIONS.md. Signed streaming payloads and aws-chunked encodings return HTTP 501. Use single PUT or multipart with `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The maximum object remains 8 MiB and the account quota remains 64 MiB; this is a small single-node object store.
 
 ## API coverage
 

@@ -1,5 +1,12 @@
-import { CHUNK_BYTES, MAX_OBJECT_BYTES, formatBytes, guessType } from "@/lib/storage/pure";
-import { abortUploadFn, beginUploadFn, finishUploadFn, readPartFn, writePartFn } from "@/lib/storage/api";
+import { CHUNK_BYTES, formatBytes, guessType } from "@/lib/storage/pure";
+import {
+  settingsFn,
+  abortUploadFn,
+  beginUploadFn,
+  finishUploadFn,
+  readPartFn,
+  writePartFn,
+} from "@/lib/storage/api";
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -19,10 +26,12 @@ export async function uploadFile(opts: {
   key: string;
   file: Blob;
   contentType?: string;
+  signal?: AbortSignal;
   onProgress?: (ratio: number) => void;
 }) {
-  if (opts.file.size > MAX_OBJECT_BYTES) {
-    return { ok: false as const, error: `Files are limited to ${formatBytes(MAX_OBJECT_BYTES)}.` };
+  const { maxObject } = await settingsFn();
+  if (opts.file.size > maxObject) {
+    return { ok: false as const, error: `Files are limited to ${formatBytes(maxObject)}.` };
   }
   const contentType =
     opts.contentType ||
@@ -40,15 +49,29 @@ export async function uploadFile(opts: {
     }
     const total = Math.ceil(opts.file.size / CHUNK_BYTES);
     for (let part = 0; part < total; part += 1) {
-      const slice = opts.file.slice(part * CHUNK_BYTES, Math.min(opts.file.size, (part + 1) * CHUNK_BYTES));
+      opts.signal?.throwIfAborted();
+      const slice = opts.file.slice(
+        part * CHUNK_BYTES,
+        Math.min(opts.file.size, (part + 1) * CHUNK_BYTES),
+      );
       const data = await blobToBase64(slice);
-      const wrote = await writePartFn({ data: { objectId: started.id, part, data } });
+      // Part writes are idempotent; only retry transport failures, not validation errors.
+      const write = () => writePartFn({ data: { objectId: started.id, part, data } });
+      let wrote;
+      try {
+        wrote = await write();
+      } catch {
+        opts.signal?.throwIfAborted();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        wrote = await write();
+      }
       if (!wrote.ok) {
         await abortUploadFn({ data: { objectId: started.id } }).catch(() => undefined);
         return wrote;
       }
       opts.onProgress?.((part + 1) / total);
     }
+    opts.signal?.throwIfAborted();
     const finished = await finishUploadFn({ data: { objectId: started.id } });
     if (!finished.ok) {
       await abortUploadFn({ data: { objectId: started.id } }).catch(() => undefined);
