@@ -8,11 +8,11 @@ const writer = spawnSync(
     "--input-type=module",
     "-e",
     `
-import * as q from './src/lib/storage/queries.server.ts';import {getPglite,getSql} from './src/lib/db.ts';import {writeFile,unlink} from 'node:fs/promises';
+import * as q from './src/lib/storage/queries.server.ts';import {getPglite,getSql} from './src/lib/db.ts';import {writeFile,unlink} from 'node:fs/promises';import {randomBytes} from 'node:crypto';
 await q.createBucket('disk-user','disk-bucket',false);await q.putBytes('disk-user','disk-bucket','sentinel',Buffer.from('must survive'),'text/plain',{});await(await getPglite()).syncToFs();
 const padding=process.env.DATA_DIR+'/pressure-padding';let failed=false;
 await writeFile(padding,Buffer.alloc(80*1024*1024));
-try { for(let i=0;i<8;i++){const result=await q.putBytes('disk-user','disk-bucket','fill-'+i,Buffer.alloc(8*1024*1024),'application/octet-stream',{});if(!result.ok)throw Error(result.code);await(await getPglite()).syncToFs();} }
+try { for(let i=0;i<8;i++){const result=await q.putBytes('disk-user','disk-bucket','fill-'+i,randomBytes(8*1024*1024),'application/octet-stream',{});if(!result.ok)throw Error(result.code);await(await getPglite()).syncToFs();} }
 catch(error){if(!/ENOSPC|No space left|disk.*full/i.test(String(error)) && error.errno!==28 && error.code!=='ENOSPC')throw error;failed=true;console.log('Disk pressure write failed as expected');}
 finally {await unlink(padding).catch(()=>{});}
 if(!failed)throw Error('Test did not reach disk pressure');await(await getPglite()).close();

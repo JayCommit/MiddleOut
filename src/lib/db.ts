@@ -160,9 +160,9 @@ async function createPgliteSql(): Promise<Sql> {
         ? undefined
         : resolve(process.env.DATA_DIR || "data", "db");
     if (dataDir) {
-      await mkdir(dataDir, { recursive: true });
       const { acquireDataLock } = await import("../../scripts/data-directory.mjs");
       globalRef.__pgliteReleaseLock__ = await acquireDataLock(resolve(dataDir, ".."), true);
+      await mkdir(dataDir, { recursive: true, mode: 0o700 });
     }
     const pg = new PGlite({
       dataDir,
