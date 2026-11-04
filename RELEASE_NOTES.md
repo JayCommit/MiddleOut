@@ -15,6 +15,6 @@ sha256sum -c SHA256SUMS --ignore-missing
 docker load -i middleout-v0.2.0-linux-amd64.tar.gz
 ```
 
-Use the arm64 archive on ARM hosts. The loaded image is tagged `ghcr.io/jaycommit/middleout:0.1.0`; it can run without signing into a registry. Public release archives provide anonymous distribution even if the registry package's visibility has not yet been changed. Configure a persistent volume at `/app/data` and the exact public `BETTER_AUTH_URL` before use; follow the repository README for account creation and HTTPS.
+Use the arm64 archive on ARM hosts. The loaded image is tagged `ghcr.io/jaycommit/middleout:0.2.0`; it can run without signing into a registry. Public release archives provide anonymous distribution even if the registry package's visibility has not yet been changed. Configure a persistent volume at `/app/data` and the exact public `BETTER_AUTH_URL` before use; follow the repository README for account creation and HTTPS.
 
 See README.md, SECURITY.md and RELEASING.md for deployment, supported operations, backups and the release process. Licensed under MIT.
