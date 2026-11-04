@@ -194,7 +194,7 @@ jobs:
           sha=$(cat release-sha.txt)
           run=$(gh run list --workflow release.yml --event push --commit "$sha" --json databaseId,headBranch --jq ".[] | select(.headBranch == \"$RELEASE_TAG\") | .databaseId" | head -1)
           test -n "$run"
-          gh run view "$run" --json jobs --jq '[.jobs[] | select(.name != "publish") | .conclusion] | length == 8 and all(. == "success")' | grep -qx true
+          gh run view "$run" --json jobs --jq '[.jobs[] | select(.name != "publish" and .name != "recover-archives") | .conclusion] | length == 8 and all(. == "success")' | grep -qx true
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${RELEASE_TAG#v}"
           for arch in amd64 arm64; do
             docker pull --platform "linux/$arch" "$image"
