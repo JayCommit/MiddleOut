@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { authenticateAgentRequest, canAgentAccessBucket } from "@/lib/storage/agents.server";
-import { overview, browse } from "@/lib/storage/queries.server";
+import { overview } from "@/lib/storage/queries.server";
+
+import { searchBucket } from "@/lib/storage/search.server";
 
 export const Route = createFileRoute("/api/agent/v1/search")({
   server: {
@@ -31,22 +33,12 @@ export const Route = createFileRoute("/api/agent/v1/search")({
 
         for (const b of bucketsToSearch) {
           try {
-            const list = await browse(auth.ownerId, b.name, "");
-            if (list.ok) {
-              for (const obj of list.objects) {
-                if (!q || obj.key.toLowerCase().includes(q)) {
-                  results.push({
-                    bucket: b.name,
-                    key: obj.key,
-                    size: obj.size,
-                    etag: obj.etag,
-                    updatedAt: obj.updatedAt,
-                  });
-                }
-              }
-            }
+            results.push(...(await searchBucket(auth.ownerId, b.name, q)));
           } catch {
-            // Ignore error from single bucket browse
+            return Response.json(
+              { ok: false, error: `Unable to search bucket '${b.name}'.` },
+              { status: 502 },
+            );
           }
         }
 

@@ -1,89 +1,113 @@
 # Middle Out
 
-Single-node, S3-compatible object storage with a web console. Buckets are private until you mark them public.
+Self-hosted, S3-compatible object storage with a web console. Run it with Docker or Node.js, store files in your database, and connect using the AWS CLI, rclone, or boto3.
 
-## What you get
+## Features
 
-- **Console** — sign in, create buckets, upload and browse objects, issue share links, manage access keys, mount external storage, manage AI agents, and read an activity log.
-- **Public browser** — public buckets are listed at `/p/<bucket>`. Private buckets return nothing there.
-- **S3 API** — path-style endpoint at `/api/s3` on the same origin. Works with the AWS CLI, rclone, boto3, and curl.
-- **Auth for clients** — AWS Signature Version 4 (headers or a presigned query string), or `Authorization: MO <access-key>:<secret>` for simple curl.
-- **Google Drive mounts** — mount any Google Drive folder as an S3 bucket transparently with OAuth2 or Service Account credentials. Supports read-only and read-write modes.
-- **AI Agent API & Native MCP Server** — scoped bearer auth (`mo_agent_live_...`), ephemeral scratch buckets with auto-expiry TTL, OpenAPI 3.1 & `/.well-known/llms.txt` discovery, and native Model Context Protocol (`middleout-mcp` stdio & SSE) support for Cursor, Claude Desktop, and autonomous agents.
+- Create buckets, upload files, browse folders, and manage access keys.
+- Keep buckets private or enable public reads.
+- Share files with expiring links.
+- Use S3 uploads, multipart uploads, downloads, copies, tags, and scoped access keys.
+- Manage account settings, storage limits, sessions, and an activity log.
+- Connect agents through a scoped REST API and a local MCP bridge.
 
-Sign-in is for the console. S3 clients use an access key from **Access keys**, not the browser session.
+Google Drive mounts support read-only and read-write folders using OAuth credentials or a service account. Console, single PUT, and multipart uploads use the mounted provider. Configure credentials in Settings, then select Google Drive when creating a bucket.
 
-## Limits
+## Quick start
 
-|                     |                                                               |
-| ------------------- | ------------------------------------------------------------- |
-| Max object          | 8 MB                                                          |
-| Account quota       | 64 MB                                                         |
-| Upload              | Single PUT and S3 Multipart Upload API (up to 10,000 parts).  |
-| Addressing          | Path-style only. No virtual-hosted bucket DNS.                |
-| Not in this version | Versioning, object lock, lifecycle, SSE, IAM bucket policies. |
-
-Object bytes live in Postgres as base64 parts, next to the metadata. Region names are labels clients can read back; there is one node.
-
-## Container releases
-
-Download the archive for your architecture and SHA256SUMS from [Releases](https://github.com/JayCommit/MiddleOut/releases), verify the checksum and load it with `docker load -i <archive>`. This works without a registry account. The image is tagged `ghcr.io/jaycommit/middleout:<version>`. A direct registry pull is also available when the package is public; GitHub defaults new registry packages to private independently of source-repository visibility.
-
-See [OPERATIONS.md](OPERATIONS.md) for password recovery, capacity configuration, metrics, scheduled maintenance, backup drills and upgrades.
-
-## Self-hosting
-
-Run on any machine with Node 22+ or Docker. No hosted control plane, auth broker, or cloud account is required. Objects, accounts, and access keys stay in your database.
-
-### Docker Compose
+Clone this repository, then run:
 
 ```bash
 cp .env.example .env
-# Set BETTER_AUTH_URL to the origin users will visit, including scheme/port.
-# The initial administrator is generated automatically.
 docker compose up -d --build
-```
-
-On an empty node, startup creates `admin@middleout.local` with a random password. Retrieve it with:
-
-```bash
 docker compose logs middleout
-# Standalone container:
-docker logs <container-name>
 ```
 
-Sign in at your configured URL. Credentials are printed only during initial creation; retain them securely and restrict access to container logs. Existing accounts are never replaced or reset on restart. Registration can remain disabled.
+Open [localhost:8080](http://localhost:8080). Sign in as `admin@middleout.local` using the password printed in the first-start logs, then change it in Settings. Registration is disabled by default.
 
-Compose retains the database and generated authentication signing secret in the `middleout-data` volume. Replacing or restarting the container keeps them. Do not delete that volume unless you intend to delete the node's data. To use a standalone Docker container, build this Dockerfile, mount a persistent volume at `/app/data`, publish port 8080, and pass the same environment variables.
+For another hostname or port, update `BETTER_AUTH_URL` in `.env` before starting. Compose binds to localhost by default.
 
-### Node
+Data and the generated authentication secret persist in the `middleout-data` Docker volume. Keep that volume when upgrading or replacing the container.
+
+### Run with Node.js
+
+Requires Node.js **22.12 or newer**.
 
 ```bash
 npm ci
 cp .env.example .env
-# Edit BETTER_AUTH_URL; startup logs the generated administrator credentials.
 npm run build
 npm start
 ```
 
-The production server listens on `0.0.0.0:8080`; configure `HOST` and `PORT` as needed. Build does not contact or migrate a database. `npm start` applies external Postgres migrations before starting; embedded migrations run before the first database request. Start commands read `.env`. For development, use `npm run dev` (port 8080).
+The server listens on port 8080. Startup creates the initial account and applies database migrations. For development, run `npm run dev`.
 
-### Database and configuration
+## Connect an S3 client
 
-| Variable             | Meaning                                                                                                                               |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `BETTER_AUTH_URL`    | Public origin, default `http://localhost:8080`. Set this to your actual URL before signing in.                                        |
-| `ALLOW_SIGN_UP`      | `true` enables registration; default disabled. Changes require a server/container restart.                                            |
-| `DATA_DIR`           | Persistent embedded storage directory; default `./data`, container `/app/data`. Contains `db/` and `auth-secret`.                     |
-| `DATABASE_URL`       | Optional standard Postgres connection string. When set, embedded storage is not used.                                                 |
-| `BETTER_AUTH_SECRET` | Stable secret of at least 32 characters. Required with external Postgres; otherwise generated and retained in `DATA_DIR/auth-secret`. |
-| `HOST`, `PORT`       | Listen address and port for the production Node server.                                                                               |
+Create an access key in the console's **Access keys** page. S3 clients use these credentials separately from your browser login.
 
-Use one application process with embedded storage; multiple processes must use external Postgres. Mount writable persistent storage owned by the container's `node` user (UID 1000) when using a bind mount. Back up embedded storage with the server stopped, retaining both the database and signing secret. Use normal Postgres backup tools for an external database. Never use `DATA_DIR=:memory:` outside disposable tests.
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_DEFAULT_REGION="us-east-1"
+export AWS_REQUEST_CHECKSUM_CALCULATION="when_required"
+export AWS_RESPONSE_CHECKSUM_VALIDATION="when_required"
+export ORIGIN="http://localhost:8080"
 
-For a domain behind a reverse proxy, terminate HTTPS at the proxy, forward requests to port 8080, and set `BETTER_AUTH_URL=https://your-domain`. Cookies automatically become secure for HTTPS origins. Keep the public origin consistent across browsers and configuration. Configure the proxy's upload limit to at least 12 MiB. `/api/health` can be used for readiness checks; the container includes a health check.
+aws --endpoint-url "$ORIGIN/api/s3" s3 mb s3://photos
+aws --endpoint-url "$ORIGIN/api/s3" s3 cp ./notes.txt s3://photos/notes.txt
+aws --endpoint-url "$ORIGIN/api/s3" s3 ls s3://photos
+```
 
-### Verification
+For rclone, use the S3 provider **Other**, endpoint `http://localhost:8080/api/s3`, and `force_path_style = true`. More client examples are available on the console's **Docs** page.
+
+## Configuration
+
+| Setting               | Default                        | Purpose                                                                  |
+| --------------------- | ------------------------------ | ------------------------------------------------------------------------ |
+| `BETTER_AUTH_URL`     | `http://localhost:8080`        | Public URL used to access the console                                    |
+| `ALLOW_SIGN_UP`       | `false`                        | Allow additional accounts to register                                    |
+| `DATA_DIR`            | `./data`                       | Embedded database and generated authentication secret                    |
+| `DATABASE_URL`        | Unset                          | Use external Postgres instead of embedded storage                        |
+| `BETTER_AUTH_SECRET`  | Generated for embedded storage | Stable secret of at least 32 characters; required with external Postgres |
+| `MAX_OBJECT_BYTES`    | `1073741824` (1 GiB)           | Default maximum object size                                              |
+| `ACCOUNT_QUOTA_BYTES` | `10737418240` (10 GiB)         | Default storage quota per account                                        |
+
+Storage limits can also be changed in Settings. See [.env.example](.env.example) for other options and [OPERATIONS.md](OPERATIONS.md) for HTTPS, backups, password recovery, metrics, and upgrades.
+
+## Agent access
+
+Create a token under **AI & Agents**, choosing its permissions, bucket scope, and expiry. REST requests use `Authorization: Bearer mo_agent_live_...`.
+
+For a local MCP client, use the bridge from this checkout. Replace the script path and token below:
+
+```json
+{
+  "mcpServers": {
+    "middleout": {
+      "command": "node",
+      "args": ["--experimental-strip-types", "/absolute/path/to/MiddleOut/bin/middleout-mcp.mjs"],
+      "env": {
+        "MIDDLEOUT_ENDPOINT": "http://localhost:8080",
+        "MIDDLEOUT_AGENT_KEY": "mo_agent_live_..."
+      }
+    }
+  }
+}
+```
+
+The bridge exposes six tools for listing buckets and files, reading and writing files, uploading artifacts, and creating share links. File listings accept a `cursor` from the previous page's `nextStart`; search scans nested keys across all listing pages. Artifact uploads create a fresh `agent-artifacts-*` scratch bucket, so scoped tokens must allow that prefix. Remote clients can connect to `/api/agent/v1/mcp` using **Streamable HTTP** and the same bearer token (legacy SSE is not supported). OpenAPI is available at `/api/agent/v1/openapi.json`, with discovery at `/.well-known/llms.txt`.
+
+## Scope and limitations
+
+- One storage node. Embedded storage requires one process per `DATA_DIR`; multiple application processes require external Postgres.
+- Object bytes are stored as base64 database parts. Transfers can load entire objects into memory, so measure your workload before raising limits.
+- S3 uses path-style addressing. Versioning, lifecycle rules, object lock, IAM bucket policies, server-side encryption, and signed streaming / `aws-chunked` requests are unsupported.
+- Bucket CORS configuration is stored but is not enforced per bucket.
+- Uploaded websites are served as downloads rather than hosted as same-origin pages.
+- Scratch buckets are removed by periodic maintenance after expiry; expiry is not an immediate access cutoff.
+
+## Development
 
 ```bash
 npm test
@@ -92,138 +116,9 @@ npm run lint
 npm run build
 npx playwright install chromium
 npm run test:selfhost
+npm run test:agents
 ```
 
-The browser smoke test uses Playwright Chromium; alternatively set `PLAYWRIGHT_CHANNEL=msedge` or `chrome` to use an installed browser. Tests use isolated in-memory databases and a temporary directory for restart tests. To exercise the SQL paths against an external database, set `TEST_DATABASE_URL` to a dedicated disposable Postgres database, apply `npm run db:migrate` to it via `DATABASE_URL`, then run `npm test`. Never point tests at a database containing real objects.
+The self-host smoke test checks login, uploads, private access, and persistence across restarts. To use an installed browser, set `PLAYWRIGHT_CHANNEL=msedge` or `chrome`.
 
-Pending console uploads reserve their declared size against quota. An overwrite keeps the original readable until completion, so both the original and pending replacement need space until publication. Failed or cancelled uploads leave the original intact. Single PUTs and multipart completion publish metadata and bytes in one transaction.
-
-IAM bucket policies are unsupported: new writes return HTTP 501. Buckets carrying policies accepted by older releases fail closed on S3 and public reads; retrieve the stored policy for recovery and explicitly remove it with `DeleteBucketPolicy` before using the bucket again. Public/private bucket access and access-key restrictions remain supported.
-
-## Talk to it
-
-```bash
-export AWS_ACCESS_KEY_ID=MO...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_DEFAULT_REGION=us-east-1
-export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
-export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
-
-aws s3 mb s3://photos --endpoint-url "$ORIGIN/api/s3"
-aws s3 cp ./notes.txt s3://photos/notes.txt --endpoint-url "$ORIGIN/api/s3"
-aws s3 ls s3://photos --endpoint-url "$ORIGIN/api/s3"
-```
-
-```bash
-curl -H "Authorization: MO $AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
-  "$ORIGIN/api/s3/photos/notes.txt" --upload-file notes.txt
-```
-
-rclone:
-
-```ini
-[middleout]
-type = s3
-provider = Other
-access_key_id = MO...
-secret_access_key = ...
-endpoint = https://your-host/api/s3
-force_path_style = true
-```
-
-`GET /api/health` returns `{ "ok": true }` when the database answers. Metrics require an explicitly configured bearer token; see OPERATIONS.md.
-
-## Internet deployment and recovery
-
-Raw Compose HTTP binds to loopback by default. To expose it through automatic HTTPS:
-
-```bash
-# In .env, set MIDDLEOUT_DOMAIN=storage.example.com
-# and BETTER_AUTH_URL=https://storage.example.com
-# Point the domain at this host and make ports 80/443 reachable.
-docker compose -f compose.yaml -f compose.https.yaml up -d --build
-```
-
-The Caddy overlay obtains TLS certificates and blocks the node-wide metrics endpoint externally. The application does not trust caller-supplied forwarding headers for rate limits. Requests behind a proxy share that proxy's application-level limiter; configure additional per-client limits at your proxy if needed. Uploaded HTML, SVG and XML download as attachments; all object/S3 responses use sandbox and nosniff protections. Same-origin user-uploaded websites are intentionally unsupported.
-
-The database takes an exclusive heartbeat lock in every embedded mode, including development and preview. Run only one process per DATA_DIR. After an abrupt crash, restart may wait up to roughly 30 seconds to reclaim a stale lock. Do not manually remove a live node's lock.
-
-### Embedded backups
-
-Stop the node before backing up. The maintenance command refuses a live embedded database and writes a SHA-256 manifest:
-
-```bash
-npm run backup -- /absolute/path/to/backups/node-2026-11-04
-# On a separate stopped node, set DATA_DIR to an ABSENT restore target:
-npm run restore -- /absolute/path/to/backups/node-2026-11-04
-npm start
-```
-
-DATA_DIR and the backup directory must be separate non-nested paths. Backup destinations must be new; restore never overwrites existing directories. Retain auth-secret with the database. Protect backup directories with filesystem permissions and encryption; checksums detect corruption, not malicious replacement of both data and manifest. For container maintenance, stop the service, then run the same scripts in a one-off container with the data volume mounted at /app/data and a separate backup directory writable by UID 1000. Do not use a raw copy of a running embedded database.
-
-For external Postgres, use a matching or newer `pg_dump` client to make a custom-format dump, restore it to a separate empty database with `pg_restore --exit-on-error`, and separately retain BETTER_AUTH_SECRET. The embedded backup tool deliberately refuses external-Postgres mode.
-
-The release gates include backup/restore, old-schema upgrade, abrupt restart and constrained-filesystem tests. See [RELEASING.md](RELEASING.md) for the exact gates and the versioned container publication process. See [SECURITY.md](SECURITY.md) for reporting and security boundaries. The project is licensed under [MIT](LICENSE).
-
-The limits above are defaults; configure them as described in OPERATIONS.md. Signed streaming payloads and aws-chunked encodings return HTTP 501. Use single PUT or multipart with `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The maximum object remains 8 MiB and the account quota remains 64 MiB; this is a small single-node object store.
-
-## API coverage
-
-Supported: bucket create, delete, head, and list; bucket location, ACL, and CORS configuration storage (CORS rules are not enforced per bucket); object put, get, head, delete, and copy; S3 Multipart Upload API (InitiateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads); Object Tagging (GET/PUT/DELETE ?tagging); ListObjects and ListObjectsV2 (prefix, delimiter, max-keys, continuation tokens); range and conditional reads (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since); SigV4 and presigned URLs; the `MO` authorization header; access key scoping (Read-Only & Bucket restriction); bounded request bodies; rate limiting; public-read buckets; Prometheus metrics (/api/metrics).
-
-## Native MCP Server & Agent Auth
-
-MiddleOut includes a native [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server and scoped Agent API designed for autonomous workflows (Cursor, Claude Desktop, autonomous agents).
-
-### Agent Configuration (Claude Desktop / Cursor)
-
-Add to your `claude_desktop_config.json` or `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "middleout": {
-      "command": "middleout-mcp",
-      "env": {
-        "MIDDLEOUT_ENDPOINT": "http://localhost:8080",
-        "MIDDLEOUT_AGENT_TOKEN": "mo_agent_live_..."
-      }
-    }
-  }
-}
-```
-
-Or connect via MCP Server-Sent Events (SSE) at `http://localhost:8080/api/agent/v1/mcp` with `Authorization: Bearer mo_agent_live_...`.
-
-### Agent Tools Provided
-- `storage_list_buckets` — List accessible buckets, quota, and expiry.
-- `storage_list_files` — List files and prefix directories in a bucket.
-- `storage_read_file` — Read file text or binary data with optional line ranges.
-- `storage_write_file` — Write content directly into a bucket.
-- `storage_upload_artifact` — Upload a run artifact and generate an instant share link.
-- `storage_get_share_link` — Generate a pre-authenticated public share link.
-
-### Agent REST API & Discovery
-- Discovery: `GET /.well-known/llms.txt` and `GET /api/agent/v1/openapi.json`.
-- Ephemeral Scratch Buckets: `POST /api/agent/v1/scratch-buckets` with `{"name": "agent-run-123", "ttl": "2h"}`. Automatically purged upon expiry.
-- Direct Artifact Upload: `POST /api/agent/v1/upload` (JSON payload or multipart).
-- Unified Search: `GET /api/agent/v1/search?q=query`.
-
-## Google Drive Mounts
-
-Mount any Google Drive folder transparently into MiddleOut:
-1. Navigate to **Settings** -> **Google Drive Integration**.
-2. Configure OAuth 2.0 Client credentials (Client ID, Secret, Refresh Token) or a Google Cloud Service Account JSON key.
-3. When creating a bucket in the Console, select **External Mount: Google Drive**, specify the Folder ID, and select **Read-Only** or **Read-Write**.
-4. The bucket now behaves like standard S3 storage backed directly by Google Drive.
-
-## Layout
-
-```text
-bin/                 middleout-mcp CLI executable
-migrations/          Postgres schema (auth, storage, mounts, agent tokens)
-src/lib/mcp/         Native Model Context Protocol (MCP) server
-src/lib/s3/          SigV4 and the S3 request engine
-src/lib/storage/     buckets, objects, keys, quota, GDrive provider, agent tokens
-src/routes/          pages and HTTP routes (console, /api/s3, /api/agent/v1/*, public objects)
-```
+See [RELEASING.md](RELEASING.md) for release checks, [SECURITY.md](SECURITY.md) for security boundaries and reporting, and [LICENSE](LICENSE) for the MIT license.

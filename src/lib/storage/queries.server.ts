@@ -132,7 +132,12 @@ export async function updateStorageLimits(ownerId: string, maxObject: number, qu
     insert into mo_settings (key, value, updated_at) values ('account_quota_bytes', ${String(quota)}, now())
     on conflict (key) do update set value = ${String(quota)}, updated_at = now()
   `;
-  await audit(sql, ownerId, "settings.limits", `max_object=${formatBytes(maxObject)} quota=${formatBytes(quota)}`);
+  await audit(
+    sql,
+    ownerId,
+    "settings.limits",
+    `max_object=${formatBytes(maxObject)} quota=${formatBytes(quota)}`,
+  );
   return { ok: true as const, maxObject, quota };
 }
 
@@ -336,11 +341,7 @@ export async function createBucket(
   }>`select region from mo_accounts where owner_id = ${ownerId}`;
   const region = account[0]?.region ?? "us-east-1";
   const acl =
-    typeof isPublicOrAcl === "string"
-      ? isPublicOrAcl
-      : isPublicOrAcl
-        ? "public-read"
-        : "private";
+    typeof isPublicOrAcl === "string" ? isPublicOrAcl : isPublicOrAcl ? "public-read" : "private";
   const isPublic = acl === "public-read" || acl === "public-read-write";
   const provider = options?.provider === "gdrive" ? "gdrive" : "local";
   const providerConfig = JSON.stringify(options?.providerConfig || {});
@@ -513,7 +514,10 @@ export async function browse(ownerId: string, name: string, prefix: string, star
         nextStart: page.nextStart,
       };
     } catch (err: unknown) {
-      return { ok: false as const, error: err instanceof Error ? err.message : "Failed to browse Google Drive." };
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : "Failed to browse Google Drive.",
+      };
     }
   }
 
@@ -636,7 +640,12 @@ export async function putBytes(
         };
       }
       await audit(sql, ownerId, "object.put", `${bucketName}/${key} (gdrive)`);
-      return { ok: true as const, id: randomUUID(), etag: res.etag || "", size: res.size ?? bytes.length };
+      return {
+        ok: true as const,
+        id: randomUUID(),
+        etag: res.etag || "",
+        size: res.size ?? bytes.length,
+      };
     }
 
     const existing = await sql<{ id: string; size: unknown }>`
@@ -672,6 +681,24 @@ async function activeUploadCount(sql: Sql, ownerId: string): Promise<number> {
   return asNum(pending[0]?.n) + asNum(mp[0]?.n);
 }
 
+function driveConfig(bucket: { provider_config?: string }) {
+  const config = JSON.parse(bucket.provider_config || "{}") as Record<string, unknown>;
+  return {
+    folderId: String(config.folderId || "root"),
+    mountMode: config.mountMode === "ro" ? ("ro" as const) : ("rw" as const),
+  };
+}
+
+function driveWriteError(bucket: { provider?: string; provider_config?: string }) {
+  return bucket.provider === "gdrive" && driveConfig(bucket).mountMode === "ro"
+    ? {
+        ok: false as const,
+        error: "Bucket is mounted as Read-Only. Cannot modify files.",
+        code: "AccessDenied",
+      }
+    : null;
+}
+
 export async function beginUpload(
   ownerId: string,
   input: { bucket: string; key: string; size: number; contentType: string; acl?: string },
@@ -690,6 +717,8 @@ export async function beginUpload(
     await lockAccountForQuota(sql, ownerId);
     const bucket = await ownedBucket(sql, ownerId, input.bucket);
     if (!bucket) return { ok: false as const, error: "Bucket not found." };
+    const denied = driveWriteError(bucket);
+    if (denied) return denied;
     if ((await activeUploadCount(sql, ownerId)) >= 256) {
       return { ok: false as const, error: "Too many active uploads in progress." };
     }
@@ -776,6 +805,29 @@ export async function finishUpload(ownerId: string, objectId: string) {
     if ((await accountBytes(sql, ownerId)) > quota)
       return { ok: false as const, error: "Account storage limit reached." };
     const etag = hash.digest("hex");
+    const bucket = await ownedBucket(sql, ownerId, row.bucket);
+    if (!bucket) return { ok: false as const, error: "Bucket not found." };
+    const denied = driveWriteError(bucket);
+    if (denied) return denied;
+    if (bucket.provider === "gdrive") {
+      const config = driveConfig(bucket);
+      const [staged] = await sql<{
+        content_type: string;
+      }>`select content_type from mo_objects where id = ${objectId}`;
+      const result = await gdrivePutObject(
+        config.folderId,
+        row.key,
+        Buffer.concat(parts.map((part) => Buffer.from(part.data, "base64"))),
+        staged.content_type,
+        ownerId,
+        config.mountMode,
+      );
+      if (!result.ok)
+        return { ok: false as const, error: result.error || "Google Drive upload failed." };
+      await sql`delete from mo_objects where id = ${objectId}`;
+      await audit(sql, ownerId, "object.put", `${row.bucket}/${row.key} (gdrive)`);
+      return { ok: true as const, etag: result.etag || etag };
+    }
     await sql`delete from mo_objects where bucket_id = ${row.bucket_id} and key = ${row.key} and complete = true`;
     await sql`update mo_objects set etag = ${etag}, complete = true, updated_at = now() where id = ${objectId}`;
     await audit(sql, ownerId, "object.put", `${row.bucket}/${row.key}`);
@@ -1015,7 +1067,11 @@ export async function getObjectAcl(ownerId: string | null, bucketName: string, k
 
 export async function setObjectAcl(ownerId: string, bucketName: string, key: string, acl: string) {
   const allowed = ["private", "public-read", "bucket-owner-full-control"];
-  const cleanAcl = allowed.includes(acl) ? (acl === "bucket-owner-full-control" ? "private" : acl) : "private";
+  const cleanAcl = allowed.includes(acl)
+    ? acl === "bucket-owner-full-control"
+      ? "private"
+      : acl
+    : "private";
   const sql = await getSql();
   const rows = await sql<{ id: string }>`
     update mo_objects set acl = ${cleanAcl}, updated_at = now()
@@ -1046,7 +1102,8 @@ export async function setTags(
   key: string,
   tags: { key: string; value: string }[],
 ) {
-  if (!Array.isArray(tags) || tags.length > 10) return { ok: false as const, error: "Up to 10 tags." };
+  if (!Array.isArray(tags) || tags.length > 10)
+    return { ok: false as const, error: "Up to 10 tags." };
   const seen = new Set<string>();
   for (const tag of tags) {
     if (
@@ -1514,6 +1571,7 @@ export async function readObjectFor(ownerId: string | null, bucketName: string, 
   const isPublic = asBool(bucket.is_public);
 
   if (bucket.provider === "gdrive") {
+    if (!owns && !isPublic) return { error: "AccessDenied" as const };
     let cfg: Record<string, unknown> = {};
     try {
       cfg = JSON.parse(bucket.provider_config || "{}");
@@ -1727,6 +1785,8 @@ export async function initiateMultipartUpload(
     await lockAccountForQuota(sql, ownerId);
     const bucket = await ownedBucket(sql, ownerId, bucketName);
     if (!bucket) return { ok: false as const, error: "Bucket not found.", code: "NoSuchBucket" };
+    const denied = driveWriteError(bucket);
+    if (denied) return denied;
     if ((await activeUploadCount(sql, ownerId)) >= 256) {
       return {
         ok: false as const,
@@ -1878,7 +1938,7 @@ export async function completeMultipartUpload(
       totalSize += buf.length;
     }
 
-    const { maxObject, quota } = await getActiveLimits(sql);
+    const { maxObject } = await getActiveLimits(sql);
     if (totalSize > maxObject) {
       return {
         ok: false as const,
@@ -1891,6 +1951,35 @@ export async function completeMultipartUpload(
     const multipartEtag = `${combinedMd5}-${expectedParts.length}`;
 
     const objectBytes = Buffer.concat(buffers);
+    const bucket = await ownedBucket(sql, ownerId, bucketName);
+    if (!bucket) return { ok: false as const, error: "Bucket not found.", code: "NoSuchBucket" };
+    const denied = driveWriteError(bucket);
+    if (denied) return denied;
+    if (bucket.provider === "gdrive") {
+      const config = driveConfig(bucket);
+      const result = await gdrivePutObject(
+        config.folderId,
+        key,
+        objectBytes,
+        upload.content_type,
+        ownerId,
+        config.mountMode,
+      );
+      if (!result.ok)
+        return {
+          ok: false as const,
+          error: result.error || "Google Drive upload failed.",
+          code: "InternalError",
+        };
+      await sql`delete from mo_multipart_uploads where id = ${uploadId}`;
+      await audit(sql, ownerId, "object.put", `${bucketName}/${key} (gdrive multipart)`);
+      return {
+        ok: true as const,
+        etag: result.etag || multipartEtag,
+        size: totalSize,
+        location: `/api/s3/${bucketName}/${key}`,
+      };
+    }
     await sql`delete from mo_objects where bucket_id = ${upload.bucket_id} and key = ${upload.key} and complete = true`;
     const objectId = randomUUID();
     const uploadHeaders = parseHeaders(upload.headers);
