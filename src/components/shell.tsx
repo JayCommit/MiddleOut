@@ -1,5 +1,5 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { Activity, BookOpen, Boxes, KeyRound, LayoutDashboard, Menu, Settings, X } from "lucide-react";
+import { Activity, BookOpen, Bot, Boxes, KeyRound, LayoutDashboard, Menu, Settings, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Logo } from "@/components/logo";
 import { UserButton } from "@/lib/auth/gates";
@@ -10,6 +10,7 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, fuzzy: false },
   { to: "/buckets", label: "Buckets", icon: Boxes, fuzzy: true },
   { to: "/keys", label: "Access keys", icon: KeyRound, fuzzy: false },
+  { to: "/agents", label: "AI & Agents", icon: Bot, fuzzy: false },
   { to: "/activity", label: "Activity", icon: Activity, fuzzy: false },
   { to: "/settings", label: "Settings", icon: Settings, fuzzy: false },
   { to: "/docs", label: "Docs", icon: BookOpen, fuzzy: false },

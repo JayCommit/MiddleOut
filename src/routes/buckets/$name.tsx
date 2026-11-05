@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   CheckSquare,
+  Cloud,
   Copy,
   Download,
   ExternalLink,
@@ -402,6 +403,17 @@ function BrowserPage() {
                       ? "Public (Read only)"
                       : "Bucket and objects not public"}
                 </Pill>
+                {data?.bucket.provider === "gdrive" && (
+                  <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-500/30">
+                    <Cloud className="h-3 w-3" />
+                    Google Drive {data.bucket.providerConfig?.mountMode === "ro" ? "(Read-Only)" : "(Mounted)"}
+                  </span>
+                )}
+                {data?.bucket.isScratch && (
+                  <span className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-400 border border-amber-500/30">
+                    Ephemeral Scratch {data.bucket.expiresAt ? `(Expires ${formatWhen(data.bucket.expiresAt)})` : ""}
+                  </span>
+                )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
                 <span className="flex items-center gap-1 font-mono">

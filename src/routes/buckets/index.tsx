@@ -7,6 +7,8 @@ import { Button, EmptyState, Field, Input, Modal, PageHeader, Pill } from "@/com
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { createBucketFn, deleteBucketFn, fetchOverview, setBucketAclFn } from "@/lib/storage/api";
 import { formatBytes, formatWhen, type CannedAcl } from "@/lib/storage/pure";
+import { cn } from "@/lib/cn";
+import { Cloud } from "lucide-react";
 
 export const Route = createFileRoute("/buckets/")({ component: BucketsPage });
 
@@ -18,6 +20,9 @@ function BucketsPage() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [selectedAcl, setSelectedAcl] = useState<CannedAcl>("private");
+  const [provider, setProvider] = useState<"local" | "gdrive">("local");
+  const [folderId, setFolderId] = useState("");
+  const [mountMode, setMountMode] = useState<"rw" | "ro">("rw");
   const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
@@ -88,6 +93,17 @@ function BucketsPage() {
                         >
                           {bucket.name}
                         </Link>
+                        {bucket.provider === "gdrive" && (
+                          <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400 border border-emerald-500/30">
+                            <Cloud className="h-2.5 w-2.5" />
+                            GDrive {bucket.providerConfig?.mountMode === "ro" ? "[RO]" : "Mount"}
+                          </span>
+                        )}
+                        {bucket.isScratch && (
+                          <span className="inline-flex items-center rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400 border border-amber-500/30">
+                            Scratch
+                          </span>
+                        )}
                         <button
                           type="button"
                           className="text-xs text-muted hover:text-fg"
@@ -149,13 +165,27 @@ function BucketsPage() {
             onSubmit={(event) => {
               event.preventDefault();
               setBusy(true);
-              void createBucketFn({ data: { name, acl: selectedAcl, isPublic: selectedAcl !== "private" } })
+              void createBucketFn({
+                data: {
+                  name,
+                  acl: selectedAcl,
+                  isPublic: selectedAcl !== "private",
+                  provider,
+                  providerConfig:
+                    provider === "gdrive"
+                      ? { folderId: folderId.trim() || "root", mountMode }
+                      : undefined,
+                },
+              })
                 .then((result) => {
                   if (!result.ok) toast.error(result.error);
                   else {
                     toast.success(`Created s3://${result.name}`);
                     setOpen(false);
                     setName("");
+                    setProvider("local");
+                    setFolderId("");
+                    setMountMode("rw");
                     setSelectedAcl("private");
                     void load();
                   }
@@ -164,6 +194,40 @@ function BucketsPage() {
                 .finally(() => setBusy(false));
             }}
           >
+            <Field label="Storage Provider">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProvider("local")}
+                  className={cn(
+                    "rounded border p-2 text-left text-xs transition-colors",
+                    provider === "local"
+                      ? "border-accent bg-accent/10 text-fg"
+                      : "border-border bg-bg text-muted hover:border-border/80",
+                  )}
+                >
+                  <div className="font-semibold text-fg">Internal Storage</div>
+                  <div className="text-[10px] text-muted">PostgreSQL chunks</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProvider("gdrive")}
+                  className={cn(
+                    "rounded border p-2 text-left text-xs transition-colors",
+                    provider === "gdrive"
+                      ? "border-emerald-500 bg-emerald-500/10 text-fg"
+                      : "border-border bg-bg text-muted hover:border-border/80",
+                  )}
+                >
+                  <div className="flex items-center gap-1 font-semibold text-fg">
+                    <Cloud className="h-3 w-3 text-emerald-400" />
+                    Google Drive
+                  </div>
+                  <div className="text-[10px] text-muted">External folder mount</div>
+                </button>
+              </div>
+            </Field>
+
             <Field label="Bucket name">
               <Input
                 value={name}
@@ -174,6 +238,33 @@ function BucketsPage() {
               />
               <span className="mt-1 block text-xs text-muted">Bucket names must be globally unique and between 3 and 63 characters long.</span>
             </Field>
+
+            {provider === "gdrive" && (
+              <>
+                <Field label="Google Drive Folder ID">
+                  <Input
+                    value={folderId}
+                    onChange={(e) => setFolderId(e.target.value)}
+                    placeholder="e.g. 1AbCdEfGhIjKlMnOp... or root"
+                    required
+                  />
+                  <span className="mt-1 block text-xs text-muted">
+                    Found in your Google Drive URL: drive.google.com/drive/folders/&lt;folder_id&gt;
+                  </span>
+                </Field>
+
+                <Field label="Mount Mode">
+                  <select
+                    className="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-fg"
+                    value={mountMode}
+                    onChange={(e) => setMountMode(e.target.value as typeof mountMode)}
+                  >
+                    <option value="rw">Read-Write (Allow uploading and deleting files)</option>
+                    <option value="ro">Read-Only (Lock files against modification)</option>
+                  </select>
+                </Field>
+              </>
+            )}
 
             <Field label="AWS Region">
               <input

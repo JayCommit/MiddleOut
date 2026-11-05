@@ -4,10 +4,12 @@ Single-node, S3-compatible object storage with a web console. Buckets are privat
 
 ## What you get
 
-- **Console** — sign in, create buckets, upload and browse objects, issue share links, manage access keys, and read an activity log.
+- **Console** — sign in, create buckets, upload and browse objects, issue share links, manage access keys, mount external storage, manage AI agents, and read an activity log.
 - **Public browser** — public buckets are listed at `/p/<bucket>`. Private buckets return nothing there.
 - **S3 API** — path-style endpoint at `/api/s3` on the same origin. Works with the AWS CLI, rclone, boto3, and curl.
 - **Auth for clients** — AWS Signature Version 4 (headers or a presigned query string), or `Authorization: MO <access-key>:<secret>` for simple curl.
+- **Google Drive mounts** — mount any Google Drive folder as an S3 bucket transparently with OAuth2 or Service Account credentials. Supports read-only and read-write modes.
+- **AI Agent API & Native MCP Server** — scoped bearer auth (`mo_agent_live_...`), ephemeral scratch buckets with auto-expiry TTL, OpenAPI 3.1 & `/.well-known/llms.txt` discovery, and native Model Context Protocol (`middleout-mcp` stdio & SSE) support for Cursor, Claude Desktop, and autonomous agents.
 
 Sign-in is for the console. S3 clients use an access key from **Access keys**, not the browser session.
 
@@ -169,11 +171,59 @@ The limits above are defaults; configure them as described in OPERATIONS.md. Sig
 
 Supported: bucket create, delete, head, and list; bucket location, ACL, and CORS configuration storage (CORS rules are not enforced per bucket); object put, get, head, delete, and copy; S3 Multipart Upload API (InitiateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads); Object Tagging (GET/PUT/DELETE ?tagging); ListObjects and ListObjectsV2 (prefix, delimiter, max-keys, continuation tokens); range and conditional reads (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since); SigV4 and presigned URLs; the `MO` authorization header; access key scoping (Read-Only & Bucket restriction); bounded request bodies; rate limiting; public-read buckets; Prometheus metrics (/api/metrics).
 
+## Native MCP Server & Agent Auth
+
+MiddleOut includes a native [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server and scoped Agent API designed for autonomous workflows (Cursor, Claude Desktop, autonomous agents).
+
+### Agent Configuration (Claude Desktop / Cursor)
+
+Add to your `claude_desktop_config.json` or `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "middleout": {
+      "command": "middleout-mcp",
+      "env": {
+        "MIDDLEOUT_ENDPOINT": "http://localhost:8080",
+        "MIDDLEOUT_AGENT_TOKEN": "mo_agent_live_..."
+      }
+    }
+  }
+}
+```
+
+Or connect via MCP Server-Sent Events (SSE) at `http://localhost:8080/api/agent/v1/mcp` with `Authorization: Bearer mo_agent_live_...`.
+
+### Agent Tools Provided
+- `storage_list_buckets` — List accessible buckets, quota, and expiry.
+- `storage_list_files` — List files and prefix directories in a bucket.
+- `storage_read_file` — Read file text or binary data with optional line ranges.
+- `storage_write_file` — Write content directly into a bucket.
+- `storage_upload_artifact` — Upload a run artifact and generate an instant share link.
+- `storage_get_share_link` — Generate a pre-authenticated public share link.
+
+### Agent REST API & Discovery
+- Discovery: `GET /.well-known/llms.txt` and `GET /api/agent/v1/openapi.json`.
+- Ephemeral Scratch Buckets: `POST /api/agent/v1/scratch-buckets` with `{"name": "agent-run-123", "ttl": "2h"}`. Automatically purged upon expiry.
+- Direct Artifact Upload: `POST /api/agent/v1/upload` (JSON payload or multipart).
+- Unified Search: `GET /api/agent/v1/search?q=query`.
+
+## Google Drive Mounts
+
+Mount any Google Drive folder transparently into MiddleOut:
+1. Navigate to **Settings** -> **Google Drive Integration**.
+2. Configure OAuth 2.0 Client credentials (Client ID, Secret, Refresh Token) or a Google Cloud Service Account JSON key.
+3. When creating a bucket in the Console, select **External Mount: Google Drive**, specify the Folder ID, and select **Read-Only** or **Read-Write**.
+4. The bucket now behaves like standard S3 storage backed directly by Google Drive.
+
 ## Layout
 
 ```text
-src/routes/          pages and HTTP routes (console, /api/s3, public objects)
+bin/                 middleout-mcp CLI executable
+migrations/          Postgres schema (auth, storage, mounts, agent tokens)
+src/lib/mcp/         Native Model Context Protocol (MCP) server
 src/lib/s3/          SigV4 and the S3 request engine
-src/lib/storage/     buckets, objects, keys, quota
-migrations/          Postgres schema (auth, then storage)
+src/lib/storage/     buckets, objects, keys, quota, GDrive provider, agent tokens
+src/routes/          pages and HTTP routes (console, /api/s3, /api/agent/v1/*, public objects)
 ```

@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ActivityRouteImport } from './routes/activity'
+import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as BucketsRouteRouteImport } from './routes/buckets/route'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as KeysRouteImport } from './routes/keys'
@@ -25,7 +26,15 @@ import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiS3IndexRouteImport } from './routes/api/s3/index'
 import { Route as ApiS3SplatRouteImport } from './routes/api/s3/$'
 import { Route as ApiShareTokenRouteImport } from './routes/api/share/$token'
+import { Route as ApiAgentV1BucketsRouteImport } from './routes/api/agent/v1/buckets'
+import { Route as ApiAgentV1McpRouteImport } from './routes/api/agent/v1/mcp'
+import { Route as ApiAgentV1ScratchBucketsRouteImport } from './routes/api/agent/v1/scratch-buckets'
+import { Route as ApiAgentV1SearchRouteImport } from './routes/api/agent/v1/search'
+import { Route as ApiAgentV1ShareRouteImport } from './routes/api/agent/v1/share'
+import { Route as ApiAgentV1UploadRouteImport } from './routes/api/agent/v1/upload'
 import { Route as ApiPublicBucketSplatRouteImport } from './routes/api/public/$bucket/$'
+import { Route as ApiAgentV1ObjectsSplatRouteImport } from './routes/api/agent/v1/objects/$'
+import { Route as ApiAgentV1OpenapiJsonRouteImport } from './routes/api/agent/v1/openapi.json'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -35,6 +44,11 @@ const IndexRoute = IndexRouteImport.update({
 const ActivityRoute = ActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentsRoute = AgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BucketsRouteRoute = BucketsRouteRouteImport.update({
@@ -107,9 +121,50 @@ const ApiShareTokenRoute = ApiShareTokenRouteImport.update({
   path: '/api/share/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAgentV1BucketsRoute = ApiAgentV1BucketsRouteImport.update({
+  id: '/api/agent/v1/buckets',
+  path: '/api/agent/v1/buckets',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentV1McpRoute = ApiAgentV1McpRouteImport.update({
+  id: '/api/agent/v1/mcp',
+  path: '/api/agent/v1/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentV1ScratchBucketsRoute =
+  ApiAgentV1ScratchBucketsRouteImport.update({
+    id: '/api/agent/v1/scratch-buckets',
+    path: '/api/agent/v1/scratch-buckets',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAgentV1SearchRoute = ApiAgentV1SearchRouteImport.update({
+  id: '/api/agent/v1/search',
+  path: '/api/agent/v1/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentV1ShareRoute = ApiAgentV1ShareRouteImport.update({
+  id: '/api/agent/v1/share',
+  path: '/api/agent/v1/share',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentV1UploadRoute = ApiAgentV1UploadRouteImport.update({
+  id: '/api/agent/v1/upload',
+  path: '/api/agent/v1/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicBucketSplatRoute = ApiPublicBucketSplatRouteImport.update({
   id: '/api/public/$bucket/$',
   path: '/api/public/$bucket/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentV1ObjectsSplatRoute = ApiAgentV1ObjectsSplatRouteImport.update({
+  id: '/api/agent/v1/objects/$',
+  path: '/api/agent/v1/objects/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentV1OpenapiJsonRoute = ApiAgentV1OpenapiJsonRouteImport.update({
+  id: '/api/agent/v1/openapi/json',
+  path: '/api/agent/v1/openapi/json',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -117,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/buckets': typeof BucketsRouteRouteWithChildren
   '/activity': typeof ActivityRoute
+  '/agents': typeof AgentsRoute
   '/docs': typeof DocsRoute
   '/keys': typeof KeysRoute
   '/login': typeof LoginRoute
@@ -130,11 +186,20 @@ export interface FileRoutesByFullPath {
   '/api/s3/$': typeof ApiS3SplatRoute
   '/api/share/$token': typeof ApiShareTokenRoute
   '/api/s3/': typeof ApiS3IndexRoute
+  '/api/agent/v1/buckets': typeof ApiAgentV1BucketsRoute
+  '/api/agent/v1/mcp': typeof ApiAgentV1McpRoute
+  '/api/agent/v1/scratch-buckets': typeof ApiAgentV1ScratchBucketsRoute
+  '/api/agent/v1/search': typeof ApiAgentV1SearchRoute
+  '/api/agent/v1/share': typeof ApiAgentV1ShareRoute
+  '/api/agent/v1/upload': typeof ApiAgentV1UploadRoute
   '/api/public/$bucket/$': typeof ApiPublicBucketSplatRoute
+  '/api/agent/v1/objects/$': typeof ApiAgentV1ObjectsSplatRoute
+  '/api/agent/v1/openapi/json': typeof ApiAgentV1OpenapiJsonRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
+  '/agents': typeof AgentsRoute
   '/docs': typeof DocsRoute
   '/keys': typeof KeysRoute
   '/login': typeof LoginRoute
@@ -148,13 +213,22 @@ export interface FileRoutesByTo {
   '/api/s3/$': typeof ApiS3SplatRoute
   '/api/share/$token': typeof ApiShareTokenRoute
   '/api/s3': typeof ApiS3IndexRoute
+  '/api/agent/v1/buckets': typeof ApiAgentV1BucketsRoute
+  '/api/agent/v1/mcp': typeof ApiAgentV1McpRoute
+  '/api/agent/v1/scratch-buckets': typeof ApiAgentV1ScratchBucketsRoute
+  '/api/agent/v1/search': typeof ApiAgentV1SearchRoute
+  '/api/agent/v1/share': typeof ApiAgentV1ShareRoute
+  '/api/agent/v1/upload': typeof ApiAgentV1UploadRoute
   '/api/public/$bucket/$': typeof ApiPublicBucketSplatRoute
+  '/api/agent/v1/objects/$': typeof ApiAgentV1ObjectsSplatRoute
+  '/api/agent/v1/openapi/json': typeof ApiAgentV1OpenapiJsonRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/buckets': typeof BucketsRouteRouteWithChildren
   '/activity': typeof ActivityRoute
+  '/agents': typeof AgentsRoute
   '/docs': typeof DocsRoute
   '/keys': typeof KeysRoute
   '/login': typeof LoginRoute
@@ -168,7 +242,15 @@ export interface FileRoutesById {
   '/api/s3/$': typeof ApiS3SplatRoute
   '/api/share/$token': typeof ApiShareTokenRoute
   '/api/s3/': typeof ApiS3IndexRoute
+  '/api/agent/v1/buckets': typeof ApiAgentV1BucketsRoute
+  '/api/agent/v1/mcp': typeof ApiAgentV1McpRoute
+  '/api/agent/v1/scratch-buckets': typeof ApiAgentV1ScratchBucketsRoute
+  '/api/agent/v1/search': typeof ApiAgentV1SearchRoute
+  '/api/agent/v1/share': typeof ApiAgentV1ShareRoute
+  '/api/agent/v1/upload': typeof ApiAgentV1UploadRoute
   '/api/public/$bucket/$': typeof ApiPublicBucketSplatRoute
+  '/api/agent/v1/objects/$': typeof ApiAgentV1ObjectsSplatRoute
+  '/api/agent/v1/openapi/json': typeof ApiAgentV1OpenapiJsonRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -176,6 +258,7 @@ export interface FileRouteTypes {
     | '/'
     | '/buckets'
     | '/activity'
+    | '/agents'
     | '/docs'
     | '/keys'
     | '/login'
@@ -189,11 +272,20 @@ export interface FileRouteTypes {
     | '/api/s3/$'
     | '/api/share/$token'
     | '/api/s3/'
+    | '/api/agent/v1/buckets'
+    | '/api/agent/v1/mcp'
+    | '/api/agent/v1/scratch-buckets'
+    | '/api/agent/v1/search'
+    | '/api/agent/v1/share'
+    | '/api/agent/v1/upload'
     | '/api/public/$bucket/$'
+    | '/api/agent/v1/objects/$'
+    | '/api/agent/v1/openapi/json'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/activity'
+    | '/agents'
     | '/docs'
     | '/keys'
     | '/login'
@@ -207,12 +299,21 @@ export interface FileRouteTypes {
     | '/api/s3/$'
     | '/api/share/$token'
     | '/api/s3'
+    | '/api/agent/v1/buckets'
+    | '/api/agent/v1/mcp'
+    | '/api/agent/v1/scratch-buckets'
+    | '/api/agent/v1/search'
+    | '/api/agent/v1/share'
+    | '/api/agent/v1/upload'
     | '/api/public/$bucket/$'
+    | '/api/agent/v1/objects/$'
+    | '/api/agent/v1/openapi/json'
   id:
     | '__root__'
     | '/'
     | '/buckets'
     | '/activity'
+    | '/agents'
     | '/docs'
     | '/keys'
     | '/login'
@@ -226,13 +327,22 @@ export interface FileRouteTypes {
     | '/api/s3/$'
     | '/api/share/$token'
     | '/api/s3/'
+    | '/api/agent/v1/buckets'
+    | '/api/agent/v1/mcp'
+    | '/api/agent/v1/scratch-buckets'
+    | '/api/agent/v1/search'
+    | '/api/agent/v1/share'
+    | '/api/agent/v1/upload'
     | '/api/public/$bucket/$'
+    | '/api/agent/v1/objects/$'
+    | '/api/agent/v1/openapi/json'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BucketsRouteRoute: typeof BucketsRouteRouteWithChildren
   ActivityRoute: typeof ActivityRoute
+  AgentsRoute: typeof AgentsRoute
   DocsRoute: typeof DocsRoute
   KeysRoute: typeof KeysRoute
   LoginRoute: typeof LoginRoute
@@ -244,7 +354,15 @@ export interface RootRouteChildren {
   ApiS3SplatRoute: typeof ApiS3SplatRoute
   ApiShareTokenRoute: typeof ApiShareTokenRoute
   ApiS3IndexRoute: typeof ApiS3IndexRoute
+  ApiAgentV1BucketsRoute: typeof ApiAgentV1BucketsRoute
+  ApiAgentV1McpRoute: typeof ApiAgentV1McpRoute
+  ApiAgentV1ScratchBucketsRoute: typeof ApiAgentV1ScratchBucketsRoute
+  ApiAgentV1SearchRoute: typeof ApiAgentV1SearchRoute
+  ApiAgentV1ShareRoute: typeof ApiAgentV1ShareRoute
+  ApiAgentV1UploadRoute: typeof ApiAgentV1UploadRoute
   ApiPublicBucketSplatRoute: typeof ApiPublicBucketSplatRoute
+  ApiAgentV1ObjectsSplatRoute: typeof ApiAgentV1ObjectsSplatRoute
+  ApiAgentV1OpenapiJsonRoute: typeof ApiAgentV1OpenapiJsonRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -261,6 +379,13 @@ declare module '@tanstack/react-router' {
       path: '/activity'
       fullPath: '/activity'
       preLoaderRoute: typeof ActivityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agents': {
+      id: '/agents'
+      path: '/agents'
+      fullPath: '/agents'
+      preLoaderRoute: typeof AgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/buckets': {
@@ -361,11 +486,67 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiShareTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/agent/v1/buckets': {
+      id: '/api/agent/v1/buckets'
+      path: '/api/agent/v1/buckets'
+      fullPath: '/api/agent/v1/buckets'
+      preLoaderRoute: typeof ApiAgentV1BucketsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/mcp': {
+      id: '/api/agent/v1/mcp'
+      path: '/api/agent/v1/mcp'
+      fullPath: '/api/agent/v1/mcp'
+      preLoaderRoute: typeof ApiAgentV1McpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/scratch-buckets': {
+      id: '/api/agent/v1/scratch-buckets'
+      path: '/api/agent/v1/scratch-buckets'
+      fullPath: '/api/agent/v1/scratch-buckets'
+      preLoaderRoute: typeof ApiAgentV1ScratchBucketsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/search': {
+      id: '/api/agent/v1/search'
+      path: '/api/agent/v1/search'
+      fullPath: '/api/agent/v1/search'
+      preLoaderRoute: typeof ApiAgentV1SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/share': {
+      id: '/api/agent/v1/share'
+      path: '/api/agent/v1/share'
+      fullPath: '/api/agent/v1/share'
+      preLoaderRoute: typeof ApiAgentV1ShareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/upload': {
+      id: '/api/agent/v1/upload'
+      path: '/api/agent/v1/upload'
+      fullPath: '/api/agent/v1/upload'
+      preLoaderRoute: typeof ApiAgentV1UploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/$bucket/$': {
       id: '/api/public/$bucket/$'
       path: '/api/public/$bucket/$'
       fullPath: '/api/public/$bucket/$'
       preLoaderRoute: typeof ApiPublicBucketSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/objects/$': {
+      id: '/api/agent/v1/objects/$'
+      path: '/api/agent/v1/objects/$'
+      fullPath: '/api/agent/v1/objects/$'
+      preLoaderRoute: typeof ApiAgentV1ObjectsSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/openapi/json': {
+      id: '/api/agent/v1/openapi/json'
+      path: '/api/agent/v1/openapi/json'
+      fullPath: '/api/agent/v1/openapi/json'
+      preLoaderRoute: typeof ApiAgentV1OpenapiJsonRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -389,6 +570,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BucketsRouteRoute: BucketsRouteRouteWithChildren,
   ActivityRoute: ActivityRoute,
+  AgentsRoute: AgentsRoute,
   DocsRoute: DocsRoute,
   KeysRoute: KeysRoute,
   LoginRoute: LoginRoute,
@@ -400,7 +582,15 @@ const rootRouteChildren: RootRouteChildren = {
   ApiS3SplatRoute: ApiS3SplatRoute,
   ApiShareTokenRoute: ApiShareTokenRoute,
   ApiS3IndexRoute: ApiS3IndexRoute,
+  ApiAgentV1BucketsRoute: ApiAgentV1BucketsRoute,
+  ApiAgentV1McpRoute: ApiAgentV1McpRoute,
+  ApiAgentV1ScratchBucketsRoute: ApiAgentV1ScratchBucketsRoute,
+  ApiAgentV1SearchRoute: ApiAgentV1SearchRoute,
+  ApiAgentV1ShareRoute: ApiAgentV1ShareRoute,
+  ApiAgentV1UploadRoute: ApiAgentV1UploadRoute,
   ApiPublicBucketSplatRoute: ApiPublicBucketSplatRoute,
+  ApiAgentV1ObjectsSplatRoute: ApiAgentV1ObjectsSplatRoute,
+  ApiAgentV1OpenapiJsonRoute: ApiAgentV1OpenapiJsonRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
