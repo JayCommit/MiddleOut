@@ -14,14 +14,31 @@ export const fetchOverview = createServerFn({ method: "GET" })
 
 export const createBucketFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { name: string; isPublic?: boolean; acl?: string }) => ({
+  .validator((input: {
+    name: string;
+    isPublic?: boolean;
+    acl?: string;
+    provider?: "local" | "gdrive";
+    providerConfig?: Record<string, string | number | boolean | null>;
+    isScratch?: boolean;
+    ttlSeconds?: number;
+  }) => ({
     name: asStr(input?.name, 128),
     isPublic: Boolean(input?.isPublic),
     acl: typeof input?.acl === "string" ? asStr(input.acl, 32) : undefined,
+    provider: input?.provider === "gdrive" ? ("gdrive" as const) : ("local" as const),
+    providerConfig: typeof input?.providerConfig === "object" && input?.providerConfig !== null ? (input.providerConfig as Record<string, string | number | boolean | null>) : undefined,
+    isScratch: Boolean(input?.isScratch),
+    ttlSeconds: typeof input?.ttlSeconds === "number" ? input.ttlSeconds : undefined,
   }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.createBucket(context.userId, data.name, data.acl ?? data.isPublic);
+    return q.createBucket(context.userId, data.name, data.acl ?? data.isPublic, {
+      provider: data.provider,
+      providerConfig: data.providerConfig,
+      isScratch: data.isScratch,
+      ttlSeconds: data.ttlSeconds,
+    });
   });
 
 export const setBucketAccessFn = createServerFn({ method: "POST" })
@@ -379,4 +396,107 @@ export const cleanupExpiredFn = createServerFn({ method: "POST" })
   .handler(async () => {
     const q = await import("./queries.server");
     return q.cleanupExpired();
+  });
+
+// --- Google Drive Cloud Integration Functions ---
+
+export const getDriveCredentialsFn = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { getDriveCredentials } = await import("./gdrive.server");
+    const creds = await getDriveCredentials(context.userId);
+    if (!creds) return null;
+    return {
+      id: creds.id,
+      provider: creds.provider,
+      authType: creds.authType,
+      clientId: creds.clientId,
+      hasRefreshToken: Boolean(creds.refreshToken),
+      hasServiceAccount: Boolean(creds.serviceAccountJson),
+      email: creds.metadata?.email,
+      totalBytes: creds.metadata?.totalBytes,
+      usedBytes: creds.metadata?.usedBytes,
+      lastTested: creds.metadata?.lastTested,
+    };
+  });
+
+export const saveDriveCredentialsFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: {
+    authType: "oauth" | "service_account";
+    clientId?: string;
+    clientSecret?: string;
+    refreshToken?: string;
+    serviceAccountJson?: string;
+  }) => ({
+    authType: input.authType === "service_account" ? ("service_account" as const) : ("oauth" as const),
+    clientId: asStr(input.clientId, 256),
+    clientSecret: asStr(input.clientSecret, 256),
+    refreshToken: asStr(input.refreshToken, 1024),
+    serviceAccountJson: asStr(input.serviceAccountJson, 65536),
+  }))
+  .handler(async ({ context, data }) => {
+    const { saveDriveCredentials } = await import("./gdrive.server");
+    return saveDriveCredentials(context.userId, data);
+  });
+
+export const deleteDriveCredentialsFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { deleteDriveCredentials } = await import("./gdrive.server");
+    return deleteDriveCredentials(context.userId);
+  });
+
+export const testDriveConnectionFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { testDriveConnection } = await import("./gdrive.server");
+    return testDriveConnection(context.userId);
+  });
+
+export const listDriveFoldersFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { parentFolderId?: string }) => ({
+    parentFolderId: asStr(input?.parentFolderId || "root", 256),
+  }))
+  .handler(async ({ context, data }) => {
+    const { listDriveFolders } = await import("./gdrive.server");
+    return listDriveFolders(context.userId, data.parentFolderId);
+  });
+
+// --- AI Agent Token Management Functions ---
+
+export const listAgentTokensFn = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { listAgentTokens } = await import("./agents.server");
+    return listAgentTokens(context.userId);
+  });
+
+export const createAgentTokenFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: {
+    name: string;
+    permissions?: "read" | "write" | "read-write" | "admin";
+    bucketScope?: string;
+    ttlDays?: number;
+  }) => ({
+    name: asStr(input?.name, 128),
+    permissions: input?.permissions || "read-write",
+    bucketScope: asStr(input?.bucketScope || "*", 256),
+    ttlDays: typeof input?.ttlDays === "number" ? input.ttlDays : undefined,
+  }))
+  .handler(async ({ context, data }) => {
+    const { createAgentToken } = await import("./agents.server");
+    return createAgentToken(context.userId, data);
+  });
+
+export const revokeAgentTokenFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { tokenId: string }) => ({
+    tokenId: asStr(input?.tokenId, 128),
+  }))
+  .handler(async ({ context, data }) => {
+    const { revokeAgentToken } = await import("./agents.server");
+    return revokeAgentToken(context.userId, data.tokenId);
   });

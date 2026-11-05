@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Authed } from "@/components/authed";
 import { Shell } from "@/components/shell";
-import { Button, PageHeader } from "@/components/ui";
+import { Button, Field, Input, Modal, PageHeader, Pill } from "@/components/ui";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import {
   cleanupExpiredFn,
@@ -13,9 +13,14 @@ import {
   setRegionFn,
   settingsFn,
   updateStorageLimitsFn,
+  getDriveCredentialsFn,
+  saveDriveCredentialsFn,
+  deleteDriveCredentialsFn,
+  testDriveConnectionFn,
 } from "@/lib/storage/api";
 import { absoluteUrl, s3Endpoint, withBase } from "@/lib/storage/paths";
 import { REGIONS, formatBytes, formatWhen } from "@/lib/storage/pure";
+import { Cloud } from "lucide-react";
 
 export const Route = createFileRoute("/settings")({ component: SettingsPage });
 
@@ -39,6 +44,23 @@ function SettingsPage() {
   const [quotaUnit, setQuotaUnit] = useState<"MB" | "GB" | "TB">("GB");
   const [savingLimits, setSavingLimits] = useState(false);
 
+  // Google Drive state
+  const [driveCreds, setDriveCreds] = useState<Awaited<ReturnType<typeof getDriveCredentialsFn>> | null>(null);
+  const [driveModalOpen, setDriveModalOpen] = useState(false);
+  const [driveAuthType, setDriveAuthType] = useState<"oauth" | "service_account">("oauth");
+  const [driveClientId, setDriveClientId] = useState("");
+  const [driveClientSecret, setDriveClientSecret] = useState("");
+  const [driveRefreshToken, setDriveRefreshToken] = useState("");
+  const [driveServiceAccountJson, setDriveServiceAccountJson] = useState("");
+  const [testingDrive, setTestingDrive] = useState(false);
+  const [savingDrive, setSavingDrive] = useState(false);
+
+  async function loadDrive() {
+    getDriveCredentialsFn()
+      .then((c) => setDriveCreds(c))
+      .catch(() => undefined);
+  }
+
   useEffect(() => setEndpoint(s3Endpoint()), []);
 
   async function loadShares() {
@@ -50,6 +72,7 @@ function SettingsPage() {
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
+    loadDrive();
     settingsFn()
       .then((settings) => {
         if (cancelled) return;
@@ -228,6 +251,89 @@ function SettingsPage() {
             </Button>
           </section>
 
+          {/* Google Drive Cloud Integration */}
+          <section className="rounded-lg border border-border bg-surface p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Cloud className="h-4 w-4 text-emerald-400" />
+                <h2 className="text-sm font-medium">Google Drive Integration</h2>
+              </div>
+              {driveCreds ? (
+                <Pill tone="accent">Connected</Pill>
+              ) : (
+                <Pill tone="neutral">Not connected</Pill>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              Map Google Drive folders directly to S3 buckets. Store large datasets without database quota constraints.
+            </p>
+
+            {driveCreds ? (
+              <div className="mt-3 flex flex-col gap-2 rounded-md border border-border bg-raised/40 p-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted">Account:</span>
+                  <span className="font-mono font-medium">{driveCreds.email || "Google Account"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted">Authentication:</span>
+                  <span className="capitalize">{driveCreds.authType === "service_account" ? "Service Account JSON" : "OAuth2"}</span>
+                </div>
+                {driveCreds.totalBytes ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted">Google Drive Storage:</span>
+                    <span>
+                      {formatBytes(driveCreds.usedBytes || 0)} used of {formatBytes(driveCreds.totalBytes)}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={testingDrive}
+                    onClick={() => {
+                      setTestingDrive(true);
+                      void testDriveConnectionFn()
+                        .then((res) => {
+                          if (res.ok) {
+                            toast.success(`Google Drive connected: ${res.email || "OK"}`);
+                            void loadDrive();
+                          } else {
+                            toast.error(res.error || "Connection test failed");
+                          }
+                        })
+                        .catch(() => toast.error("Connection test failed"))
+                        .finally(() => setTestingDrive(false));
+                    }}
+                  >
+                    {testingDrive ? "Testing…" : "Test connection"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      void deleteDriveCredentialsFn().then(() => {
+                        toast.success("Disconnected Google Drive");
+                        void loadDrive();
+                      });
+                    }}
+                  >
+                    Disconnect
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3"
+                onClick={() => setDriveModalOpen(true)}
+              >
+                Connect Google Drive
+              </Button>
+            )}
+          </section>
+
           <section className="rounded-lg border border-border bg-surface p-4">
             <h2 className="text-sm font-medium">Default region</h2>
             <div className="mt-3 flex flex-col gap-3 sm:flex-row">
@@ -340,6 +446,101 @@ function SettingsPage() {
             </Button>
           </section>
         </div>
+
+        {driveModalOpen && (
+          <Modal title="Connect Google Drive" onClose={() => setDriveModalOpen(false)}>
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setSavingDrive(true);
+                void saveDriveCredentialsFn({
+                  data: {
+                    authType: driveAuthType,
+                    clientId: driveClientId,
+                    clientSecret: driveClientSecret,
+                    refreshToken: driveRefreshToken,
+                    serviceAccountJson: driveServiceAccountJson,
+                  },
+                })
+                  .then(() => {
+                    toast.success("Google Drive credentials saved");
+                    setDriveModalOpen(false);
+                    void loadDrive();
+                  })
+                  .catch((err: unknown) => {
+                    toast.error(err instanceof Error ? err.message : "Failed to save credentials");
+                  })
+                  .finally(() => setSavingDrive(false));
+              }}
+            >
+              <Field label="Authentication Method">
+                <select
+                  className="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-fg"
+                  value={driveAuthType}
+                  onChange={(e) => setDriveAuthType(e.target.value as typeof driveAuthType)}
+                >
+                  <option value="oauth">Google OAuth2 (Client ID & Refresh Token)</option>
+                  <option value="service_account">Google Service Account JSON Key</option>
+                </select>
+              </Field>
+
+              {driveAuthType === "service_account" ? (
+                <Field label="Service Account JSON Key">
+                  <textarea
+                    rows={6}
+                    className="w-full rounded border border-border bg-bg p-2 font-mono text-xs text-fg"
+                    placeholder={`{\n  "type": "service_account",\n  "client_email": "middleout@project.iam.gserviceaccount.com",\n  "private_key": "-----BEGIN PRIVATE KEY-----\\n..."\n}`}
+                    value={driveServiceAccountJson}
+                    onChange={(e) => setDriveServiceAccountJson(e.target.value)}
+                    required
+                  />
+                  <span className="mt-1 block text-xs text-muted">
+                    Paste the entire JSON key downloaded from Google Cloud IAM.
+                  </span>
+                </Field>
+              ) : (
+                <>
+                  <Field label="OAuth Client ID">
+                    <Input
+                      value={driveClientId}
+                      onChange={(e) => setDriveClientId(e.target.value)}
+                      placeholder="xxxx.apps.googleusercontent.com"
+                      required
+                    />
+                  </Field>
+                  <Field label="OAuth Client Secret">
+                    <Input
+                      type="password"
+                      value={driveClientSecret}
+                      onChange={(e) => setDriveClientSecret(e.target.value)}
+                      placeholder="Client secret"
+                      required
+                    />
+                  </Field>
+                  <Field label="OAuth Refresh Token">
+                    <Input
+                      type="password"
+                      value={driveRefreshToken}
+                      onChange={(e) => setDriveRefreshToken(e.target.value)}
+                      placeholder="1//04xxxx..."
+                      required
+                    />
+                  </Field>
+                </>
+              )}
+
+              <div className="mt-2 flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setDriveModalOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={savingDrive}>
+                  {savingDrive ? "Connecting…" : "Connect"}
+                </Button>
+              </div>
+            </form>
+          </Modal>
+        )}
       </Shell>
     </Authed>
   );

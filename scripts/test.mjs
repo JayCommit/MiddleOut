@@ -11,6 +11,8 @@ const result = spawnSync(
     "src/lib/storage/pure.test.ts",
     "src/lib/storage/features.test.ts",
     "src/lib/storage/regressions.test.ts",
+    "src/lib/storage/gdrive.test.ts",
+    "src/lib/storage/agent-mcp.test.ts",
     "scripts/bootstrap.test.mjs",
     "scripts/readiness.test.mjs",
     "scripts/runtime-config.test.mjs",

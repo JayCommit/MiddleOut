@@ -13,6 +13,12 @@ import {
   validateBucketName,
   validateKey,
 } from "./pure.ts";
+import {
+  gdriveListObjects,
+  gdriveGetObject,
+  gdrivePutObject,
+  gdriveDeleteObject,
+} from "./gdrive.server.ts";
 
 type BucketRow = {
   id: string;
@@ -22,6 +28,10 @@ type BucketRow = {
   created_at: unknown;
   object_count?: unknown;
   bytes?: unknown;
+  provider?: string;
+  provider_config?: string;
+  is_scratch?: unknown;
+  expires_at?: unknown;
 };
 
 type ObjectRow = {
@@ -215,8 +225,16 @@ export async function ensureAccount(ownerId: string): Promise<void> {
   });
 }
 
+export type ProviderConfig = Record<string, string | number | boolean | null>;
+
 function mapBucket(row: BucketRow & { acl?: string }) {
   const isPublic = asBool(row.is_public);
+  let providerConfig: ProviderConfig = {};
+  try {
+    providerConfig = JSON.parse(row.provider_config || "{}") as ProviderConfig;
+  } catch {
+    providerConfig = {};
+  }
   return {
     id: row.id,
     name: row.name,
@@ -226,6 +244,10 @@ function mapBucket(row: BucketRow & { acl?: string }) {
     objectCount: asNum(row.object_count),
     bytes: asNum(row.bytes),
     acl: row.acl || (isPublic ? "public-read" : "private"),
+    provider: (row.provider as "local" | "gdrive") || "local",
+    providerConfig,
+    isScratch: asBool(row.is_scratch),
+    expiresAt: row.expires_at ? iso(row.expires_at) : null,
   };
 }
 
@@ -235,12 +257,13 @@ export async function overview(ownerId: string) {
   const buckets = await sql<BucketRow & { acl?: string }>`
     select b.id, b.name, b.is_public, b.region, b.created_at,
       coalesce(b.acl, case when b.is_public then 'public-read' else 'private' end) as acl,
+      b.provider, b.provider_config, b.is_scratch, b.expires_at,
       count(o.id)::int as object_count,
       coalesce(sum(o.size), 0)::bigint as bytes
     from mo_buckets b
     left join mo_objects o on o.bucket_id = b.id and o.complete = true
     where b.owner_id = ${ownerId}
-    group by b.id, b.name, b.is_public, b.region, b.created_at, b.acl
+    group by b.id, b.name, b.is_public, b.region, b.created_at, b.acl, b.provider, b.provider_config, b.is_scratch, b.expires_at
     order by b.created_at desc
   `;
   const mapped = buckets.map(mapBucket);
@@ -277,6 +300,13 @@ export async function createBucket(
   ownerId: string,
   rawName: string,
   isPublicOrAcl: boolean | string = false,
+  options?: {
+    provider?: "local" | "gdrive";
+    providerConfig?: Record<string, unknown>;
+    isScratch?: boolean;
+    expiresAt?: string | null;
+    ttlSeconds?: number;
+  },
 ) {
   const nameError = validateBucketName(rawName);
   if (nameError) return { ok: false as const, error: nameError };
@@ -312,9 +342,17 @@ export async function createBucket(
         ? "public-read"
         : "private";
   const isPublic = acl === "public-read" || acl === "public-read-write";
-  await sql`insert into mo_buckets (id, owner_id, name, is_public, region, acl) values (${randomUUID()}, ${ownerId}, ${name}, ${isPublic}, ${region}, ${acl})`;
-  await audit(sql, ownerId, "bucket.create", name);
-  return { ok: true as const, name, acl, isPublic };
+  const provider = options?.provider === "gdrive" ? "gdrive" : "local";
+  const providerConfig = JSON.stringify(options?.providerConfig || {});
+  const isScratch = Boolean(options?.isScratch);
+  let expiresAt: string | null = options?.expiresAt || null;
+  if (isScratch && options?.ttlSeconds && options.ttlSeconds > 0) {
+    expiresAt = new Date(Date.now() + options.ttlSeconds * 1000).toISOString();
+  }
+  await sql`insert into mo_buckets (id, owner_id, name, is_public, region, acl, provider, provider_config, is_scratch, expires_at)
+    values (${randomUUID()}, ${ownerId}, ${name}, ${isPublic}, ${region}, ${acl}, ${provider}, ${providerConfig}, ${isScratch}, ${expiresAt})`;
+  await audit(sql, ownerId, isScratch ? "scratch.create" : "bucket.create", name);
+  return { ok: true as const, name, acl, isPublic, provider, isScratch, expiresAt };
 }
 
 export async function setBucketAccess(ownerId: string, name: string, isPublic: boolean) {
@@ -403,10 +441,14 @@ async function ownedBucket(sql: Sql, ownerId: string, name: string) {
     acl?: string;
     cors_rules?: string | null;
     policy?: string | null;
+    provider?: string;
+    provider_config?: string;
+    is_scratch?: unknown;
+    expires_at?: unknown;
   }>`
     select id, name, is_public, region, created_at,
       coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl,
-      cors_rules, policy
+      cors_rules, policy, provider, provider_config, is_scratch, expires_at
     from mo_buckets where name = ${name} and owner_id = ${ownerId}
   `;
   return rows[0] ?? null;
@@ -416,6 +458,65 @@ export async function browse(ownerId: string, name: string, prefix: string, star
   const sql = await getSql();
   const bucket = await ownedBucket(sql, ownerId, name);
   if (!bucket) return { ok: false as const, error: "Bucket not found." };
+
+  let providerConfig: ProviderConfig = {};
+  try {
+    providerConfig = JSON.parse(bucket.provider_config || "{}") as ProviderConfig;
+  } catch {
+    providerConfig = {};
+  }
+
+  if (bucket.provider === "gdrive") {
+    try {
+      const folderId = String(providerConfig.folderId || "root");
+      const items = await gdriveListObjects(folderId, ownerId, prefix);
+      const mapped = items
+        .filter((item) => !startAfter || item.key > startAfter)
+        .map((item) => ({
+          id: item.etag,
+          key: item.key,
+          size: item.size,
+          etag: item.etag,
+          updatedAt: item.updatedAt,
+          contentType: item.contentType,
+          acl: "private",
+        }));
+      const page = groupListing(mapped, {
+        prefix,
+        delimiter: "/",
+        maxKeys: 50,
+        skipExactPrefix: true,
+        rawCapped: items.length >= 5000,
+      });
+      return {
+        ok: true as const,
+        bucket: {
+          id: bucket.id,
+          name: bucket.name,
+          isPublic: asBool(bucket.is_public),
+          region: bucket.region,
+          createdAt: iso(bucket.created_at),
+          acl: bucket.acl || (asBool(bucket.is_public) ? "public-read" : "private"),
+          corsRules: bucket.cors_rules || "[]",
+          policy: bucket.policy ?? null,
+          provider: "gdrive",
+          providerConfig,
+          isScratch: asBool(bucket.is_scratch),
+          expiresAt: bucket.expires_at ? iso(bucket.expires_at) : null,
+          objectCount: items.length,
+          totalBytes: items.reduce((sum, item) => sum + item.size, 0),
+        },
+        prefix,
+        folders: page.prefixes,
+        objects: page.contents,
+        truncated: page.truncated,
+        nextStart: page.nextStart,
+      };
+    } catch (err: unknown) {
+      return { ok: false as const, error: err instanceof Error ? err.message : "Failed to browse Google Drive." };
+    }
+  }
+
   const countStats = await sql<{ count: unknown; bytes: unknown }>`
     select count(*)::int as count, coalesce(sum(size), 0)::bigint as bytes
     from mo_objects where bucket_id = ${bucket.id} and complete = true
@@ -462,6 +563,10 @@ export async function browse(ownerId: string, name: string, prefix: string, star
       acl: bucket.acl || (asBool(bucket.is_public) ? "public-read" : "private"),
       corsRules: bucket.cors_rules || "[]",
       policy: bucket.policy ?? null,
+      provider: "local",
+      providerConfig,
+      isScratch: asBool(bucket.is_scratch),
+      expiresAt: bucket.expires_at ? iso(bucket.expires_at) : null,
       objectCount: asNum(countStats[0]?.count),
       totalBytes: asNum(countStats[0]?.bytes),
     },
@@ -505,6 +610,34 @@ export async function putBytes(
     await lockAccountForQuota(sql, ownerId);
     const bucket = await ownedBucket(sql, ownerId, bucketName);
     if (!bucket) return { ok: false as const, error: "Bucket not found.", code: "NoSuchBucket" };
+
+    if (bucket.provider === "gdrive") {
+      let cfg: Record<string, unknown> = {};
+      try {
+        cfg = JSON.parse(bucket.provider_config || "{}");
+      } catch {
+        cfg = {};
+      }
+      const folderId = String(cfg.folderId || "root");
+      const mountMode = (cfg.mountMode as "ro" | "rw") || "rw";
+      const res = await gdrivePutObject(
+        folderId,
+        key,
+        bytes,
+        contentType || "application/octet-stream",
+        ownerId,
+        mountMode,
+      );
+      if (!res.ok) {
+        return {
+          ok: false as const,
+          error: res.error || "Google Drive upload failed.",
+          code: mountMode === "ro" ? "AccessDenied" : "InternalError",
+        };
+      }
+      await audit(sql, ownerId, "object.put", `${bucketName}/${key} (gdrive)`);
+      return { ok: true as const, id: randomUUID(), etag: res.etag || "", size: res.size ?? bytes.length };
+    }
 
     const existing = await sql<{ id: string; size: unknown }>`
     select id, size from mo_objects where bucket_id = ${bucket.id} and key = ${key} and complete = true
@@ -681,6 +814,23 @@ export async function cleanupExpired(maxAgeSeconds = 86400) {
       await tx`delete from mo_multipart_uploads where id in (select id from mo_multipart_uploads where updated_at < ${cutoff} and owner_id = ${owner.owner_id} limit 1000)`;
     });
   await sql`delete from mo_links where token in (select token from mo_links where expires_at < now() limit 1000)`;
+
+  // Expired scratch buckets
+  const expiredScratch = await sql<{ id: string; name: string; owner_id: string }>`
+    select id, name, owner_id from mo_buckets
+    where is_scratch = true and expires_at is not null and expires_at < now()
+    limit 100
+  `;
+  for (const b of expiredScratch) {
+    await sql.transaction(async (tx) => {
+      await tx`delete from mo_buckets where id = ${b.id}`;
+      await audit(tx, b.owner_id, "scratch.expired", b.name);
+    });
+  }
+
+  // Expired agent tokens
+  await sql`delete from mo_agent_tokens where expires_at is not null and expires_at < now()`;
+
   const auditCutoff = new Date(Date.now() - auditRetentionDays * 86400000).toISOString();
   await sql`delete from mo_audit where id in (select id from mo_audit where created_at < ${auditCutoff} limit 1000)`;
   return { ok: true as const };
@@ -691,6 +841,28 @@ export async function removeObject(ownerId: string, bucketName: string, key: str
     await lockAccountForQuota(sql, ownerId);
     const bucket = await ownedBucket(sql, ownerId, bucketName);
     if (!bucket) return { ok: false as const, error: "Bucket not found.", code: "NoSuchBucket" };
+
+    if (bucket.provider === "gdrive") {
+      let cfg: Record<string, unknown> = {};
+      try {
+        cfg = JSON.parse(bucket.provider_config || "{}");
+      } catch {
+        cfg = {};
+      }
+      const folderId = String(cfg.folderId || "root");
+      const mountMode = (cfg.mountMode as "ro" | "rw") || "rw";
+      const res = await gdriveDeleteObject(folderId, key, ownerId, mountMode);
+      if (!res.ok) {
+        return {
+          ok: false as const,
+          error: res.error || "Delete failed",
+          code: mountMode === "ro" ? "AccessDenied" : "InternalError",
+        };
+      }
+      await audit(sql, ownerId, "object.delete", `${bucketName}/${key} (gdrive)`);
+      return { ok: true as const };
+    }
+
     const rows = await sql<{ id: string }>`
     delete from mo_objects where bucket_id = ${bucket.id} and key = ${key} and complete = true returning id
   `;
@@ -754,6 +926,36 @@ async function tagsFor(sql: Sql, objectId: string) {
 
 export async function objectDetail(ownerId: string, bucketName: string, key: string) {
   const sql = await getSql();
+  const bucket = await ownedBucket(sql, ownerId, bucketName);
+  if (!bucket) return { ok: false as const, error: "Bucket not found." };
+
+  if (bucket.provider === "gdrive") {
+    let cfg: Record<string, unknown> = {};
+    try {
+      cfg = JSON.parse(bucket.provider_config || "{}");
+    } catch {
+      cfg = {};
+    }
+    const folderId = String(cfg.folderId || "root");
+    const driveObj = await gdriveGetObject(folderId, key, ownerId);
+    if (!driveObj) return { ok: false as const, error: "Object not found." };
+    return {
+      ok: true as const,
+      object: {
+        id: driveObj.etag,
+        key,
+        size: driveObj.size,
+        contentType: driveObj.contentType,
+        etag: driveObj.etag,
+        updatedAt: driveObj.updatedAt,
+        acl: "private",
+        partCount: 1,
+        shares: [],
+        tags: [],
+      },
+    };
+  }
+
   const rows = await sql<ObjectRow & { part_count: unknown; acl?: string }>`
     select o.id, o.key, o.size, o.content_type, o.etag, o.updated_at, o.headers,
       coalesce(o.acl, 'private') as acl,
@@ -1297,9 +1499,12 @@ export async function readObjectFor(ownerId: string | null, bucketName: string, 
     region: string;
     policy: string | null;
     acl?: string;
+    provider?: string;
+    provider_config?: string;
   }>`
     select id, owner_id, is_public, region, policy,
-      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl
+      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl,
+      provider, provider_config
     from mo_buckets where name = ${bucketName}
   `;
   const bucket = buckets[0];
@@ -1307,6 +1512,32 @@ export async function readObjectFor(ownerId: string | null, bucketName: string, 
   if (bucket.policy !== null) return { error: "AccessDenied" as const };
   const owns = ownerId !== null && bucket.owner_id === ownerId;
   const isPublic = asBool(bucket.is_public);
+
+  if (bucket.provider === "gdrive") {
+    let cfg: Record<string, unknown> = {};
+    try {
+      cfg = JSON.parse(bucket.provider_config || "{}");
+    } catch {
+      cfg = {};
+    }
+    const folderId = String(cfg.folderId || "root");
+    const driveObj = await gdriveGetObject(folderId, key, bucket.owner_id);
+    if (!driveObj) return { error: "NoSuchKey" as const, bucket };
+    return {
+      bucket,
+      object: {
+        id: driveObj.etag,
+        key,
+        size: driveObj.size,
+        contentType: driveObj.contentType,
+        etag: driveObj.etag,
+        updatedAt: driveObj.updatedAt,
+        headers: {},
+        bytes: driveObj.bytes,
+        acl: "private",
+      } satisfies S3Object,
+    };
+  }
 
   const rows = await sql<ObjectRow & { acl?: string }>`
     select o.id, o.key, o.size, o.content_type, o.etag, o.updated_at, o.headers,
@@ -1350,8 +1581,10 @@ export async function listForS3(
     region: string;
     name: string;
     policy: string | null;
+    provider?: string;
+    provider_config?: string;
   }>`
-    select id, owner_id, is_public, region, name, policy from mo_buckets where name = ${bucketName}
+    select id, owner_id, is_public, region, name, policy, provider, provider_config from mo_buckets where name = ${bucketName}
   `;
   const bucket = buckets[0];
   if (!bucket) return { error: "NoSuchBucket" as const };
@@ -1359,6 +1592,33 @@ export async function listForS3(
   const owns = ownerId !== null && bucket.owner_id === ownerId;
   if (!owns && !asBool(bucket.is_public)) return { error: "AccessDenied" as const };
   const cap = Math.min(1000, Math.max(0, maxKeys));
+
+  if (bucket.provider === "gdrive") {
+    let cfg: Record<string, unknown> = {};
+    try {
+      cfg = JSON.parse(bucket.provider_config || "{}");
+    } catch {
+      cfg = {};
+    }
+    const folderId = String(cfg.folderId || "root");
+    const items = await gdriveListObjects(folderId, bucket.owner_id, prefix);
+    const mapped = items
+      .filter((item) => !startAfter || item.key > startAfter)
+      .map((item) => ({
+        key: item.key,
+        size: item.size,
+        etag: item.etag,
+        updatedAt: item.updatedAt,
+      }));
+    const page = groupListing(mapped, {
+      prefix,
+      delimiter,
+      maxKeys: cap,
+      rawCapped: items.length >= 5000,
+    });
+    return { bucket, ...page };
+  }
+
   const rows = await sql<{ key: string; size: unknown; etag: string; updated_at: unknown }>`
     select key, size, etag, updated_at from mo_objects
     where bucket_id = ${bucket.id} and complete = true
@@ -1400,9 +1660,14 @@ export async function bucketRecord(name: string) {
     name: string;
     policy: string | null;
     acl?: string;
+    provider?: string;
+    provider_config?: string;
+    is_scratch?: unknown;
+    expires_at?: unknown;
   }>`
     select id, owner_id, is_public, region, name, policy,
-      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl
+      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl,
+      provider, provider_config, is_scratch, expires_at
     from mo_buckets where name = ${name}
   `;
   return rows[0]
@@ -1410,6 +1675,16 @@ export async function bucketRecord(name: string) {
         ...rows[0],
         isPublic: asBool(rows[0].is_public),
         acl: rows[0].acl || (asBool(rows[0].is_public) ? "public-read" : "private"),
+        provider: (rows[0].provider as "local" | "gdrive") || "local",
+        providerConfig: (() => {
+          try {
+            return JSON.parse(rows[0].provider_config || "{}");
+          } catch {
+            return {};
+          }
+        })(),
+        isScratch: asBool(rows[0].is_scratch),
+        expiresAt: rows[0].expires_at ? iso(rows[0].expires_at) : null,
       }
     : null;
 }
