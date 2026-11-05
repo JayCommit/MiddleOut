@@ -16,9 +16,17 @@ docker compose up -d
 
 For a source installation, stop the server and run `npm run admin:reset -- admin@middleout.local`. This updates only an existing password credential, revokes all its browser sessions, and retains buckets, objects and S3 access keys. It never creates a missing account. Save the replacement password securely. Embedded storage refuses the reset while another process holds its data lock. External Postgres operators should also stop application processes during recovery. No email provider is required.
 
-## Capacity and monitoring
+## Capacity, limits and ACL management
 
-Defaults remain 8 MiB/object and 64 MiB/account. Set MAX_OBJECT_BYTES and ACCOUNT_QUOTA_BYTES in .env and recreate the service. Object limits accept 1 byte through 128 MiB; the quota must be at least the object limit and at most 1 TiB. These validation ceilings are not performance guarantees. Existing objects are retained if limits are reduced; writes remain subject to quota. The console reads limits from the server, and the S3 and transport limits use the same configuration. If your reverse proxy applies a body-size cap, allow at least `max(12 MiB, ceil(MAX_OBJECT_BYTES * 4/3) + 1 MiB)`. The bundled Caddy configuration does not impose a separate upload body cap.
+Defaults are 1 GiB/object and 10 GiB/account quota. Admins can configure upload size limits and account quotas dynamically in the Settings page (with unit selectors for MB, GB, and TB) or configure baseline defaults via `MAX_OBJECT_BYTES` and `ACCOUNT_QUOTA_BYTES` in `.env`. Object limits accept 1 byte through 5 TiB (matching Amazon S3's single-object ceiling); the account quota must be at least the object limit and at most 1 PiB. Dynamically configured limits apply immediately across console uploads, simple S3 PUT operations, and S3 multipart uploads without requiring service restarts.
+
+MiddleOut also supports Amazon S3 Access Control Lists (ACLs) for both buckets and objects:
+- Canned ACLs: `private`, `public-read`, `public-read-write`, and `authenticated-read`.
+- S3 API: Respects `x-amz-acl` headers on PUT requests and `?acl` subresource endpoints (`GET /<bucket>?acl`, `PUT /<bucket>?acl`, `GET /<bucket>/<key>?acl`, `PUT /<bucket>/<key>?acl`) using standard S3 XML `AccessControlPolicy`.
+- Anonymous access: Objects marked `public-read` (or stored inside a `public-read` bucket) can be accessed anonymously without AWS SigV4 signatures.
+- Web Console: Full AWS S3 console experience including Bucket permissions (Block public access, ACL grantee table, Bucket Policy, CORS) and per-object ACL management.
+
+Existing objects are retained if limits are reduced; writes remain subject to quota. The console reads limits from the server, and the S3 and transport limits use the same configuration. If your reverse proxy applies a body-size cap, configure it to accommodate your desired maximum upload size (e.g. `client_max_body_size 1024M` in Nginx). The bundled Caddy configuration does not impose a separate upload body cap.
 
 Objects are still base64 database parts and reads/writes may materialize entire objects. Use the defaults initially, keep concurrent large transfers low, and measure before raising limits. A 2 GiB memory allocation is a conservative starting point for evaluation, not a measured minimum or a production guarantee. BENCHMARK_RESULTS.json records a reproducible local sample with hardware, runtime, timings, RSS snapshots and disk growth. `npm run build && npm run benchmark` uses a disposable embedded database, random bytes and verified readback. It also exercises four concurrent 1 MiB HTTP write/read clients and a restart with byte verification. It does not measure TLS, sustained production load or peak memory. Size your deployment using its actual client workload and observe RSS, disk growth, backup time and restart time. The existing container gates verify crashes and disk exhaustion; they do not establish throughput SLAs.
 

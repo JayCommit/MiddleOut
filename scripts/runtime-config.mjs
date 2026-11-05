@@ -12,15 +12,15 @@ export function integerSetting(name, fallback, min, max) {
 }
 export const maxObjectBytes = integerSetting(
   "MAX_OBJECT_BYTES",
-  8 * 1024 * 1024,
+  1024 * 1024 * 1024, // 1 GB default (configurable higher or lower)
   1,
-  128 * 1024 * 1024,
+  5 * 1024 ** 4, // 5 TB ceiling (AWS S3 max object size)
 );
 export const accountQuotaBytes = integerSetting(
   "ACCOUNT_QUOTA_BYTES",
-  64 * 1024 * 1024,
+  10 * 1024 * 1024 * 1024, // 10 GB default
   maxObjectBytes,
-  1024 ** 4,
+  1024 ** 5,
 );
 export const maxRequestBytes = Math.max(
   12 * 1024 * 1024,

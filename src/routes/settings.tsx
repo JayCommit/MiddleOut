@@ -12,6 +12,7 @@ import {
   revokeShareFn,
   setRegionFn,
   settingsFn,
+  updateStorageLimitsFn,
 } from "@/lib/storage/api";
 import { absoluteUrl, s3Endpoint, withBase } from "@/lib/storage/paths";
 import { REGIONS, formatBytes, formatWhen } from "@/lib/storage/pure";
@@ -30,6 +31,13 @@ function SettingsPage() {
   const [health, setHealth] = useState("Checking…");
   const [shares, setShares] = useState<ShareRow[]>([]);
   const [cleaning, setCleaning] = useState(false);
+
+  // Storage limits controls
+  const [maxObjectVal, setMaxObjectVal] = useState(1);
+  const [maxObjectUnit, setMaxObjectUnit] = useState<"MB" | "GB">("GB");
+  const [quotaVal, setQuotaVal] = useState(10);
+  const [quotaUnit, setQuotaUnit] = useState<"MB" | "GB" | "TB">("GB");
+  const [savingLimits, setSavingLimits] = useState(false);
 
   useEffect(() => setEndpoint(s3Endpoint()), []);
 
@@ -51,6 +59,25 @@ function SettingsPage() {
         setRegion(settings.region);
         setQuota(settings.quota);
         setMaxObject(settings.maxObject);
+
+        if (settings.maxObject >= 1024 * 1024 * 1024) {
+          setMaxObjectVal(Math.round(settings.maxObject / (1024 * 1024 * 1024)));
+          setMaxObjectUnit("GB");
+        } else {
+          setMaxObjectVal(Math.max(1, Math.round(settings.maxObject / (1024 * 1024))));
+          setMaxObjectUnit("MB");
+        }
+
+        if (settings.quota >= 1024 ** 4) {
+          setQuotaVal(Math.round(settings.quota / 1024 ** 4));
+          setQuotaUnit("TB");
+        } else if (settings.quota >= 1024 * 1024 * 1024) {
+          setQuotaVal(Math.round(settings.quota / (1024 * 1024 * 1024)));
+          setQuotaUnit("GB");
+        } else {
+          setQuotaVal(Math.max(1, Math.round(settings.quota / (1024 * 1024))));
+          setQuotaUnit("MB");
+        }
       })
       .catch(() => {
         if (!cancelled) toast.error("Could not load settings.");
@@ -97,6 +124,92 @@ function SettingsPage() {
                 <dd>{quota ? formatBytes(quota) : "—"}</dd>
               </div>
             </dl>
+          </section>
+
+          <section className="rounded-lg border border-border bg-surface p-4">
+            <h2 className="text-sm font-medium">Storage & upload limits</h2>
+            <p className="mt-1 text-xs text-muted">
+              Configure upload size maximums and total account storage quota. Default object upload max is 1 GB, and can be configured higher or lower.
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="text-xs font-medium text-muted">Max upload size</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="50000"
+                    value={maxObjectVal}
+                    onChange={(e) => setMaxObjectVal(Math.max(1, Number(e.target.value)))}
+                    className="h-10 w-full rounded-md border border-border bg-bg px-3 text-sm font-mono"
+                  />
+                  <select
+                    value={maxObjectUnit}
+                    onChange={(e) => setMaxObjectUnit(e.target.value as "MB" | "GB")}
+                    className="h-10 rounded-md border border-border bg-bg px-2 text-sm"
+                  >
+                    <option value="MB">MB</option>
+                    <option value="GB">GB</option>
+                  </select>
+                </div>
+                <p className="mt-1 text-xs text-muted">Current: {maxObject ? formatBytes(maxObject) : "1 GB"}</p>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-muted">Account quota</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="50000"
+                    value={quotaVal}
+                    onChange={(e) => setQuotaVal(Math.max(1, Number(e.target.value)))}
+                    className="h-10 w-full rounded-md border border-border bg-bg px-3 text-sm font-mono"
+                  />
+                  <select
+                    value={quotaUnit}
+                    onChange={(e) => setQuotaUnit(e.target.value as "MB" | "GB" | "TB")}
+                    className="h-10 rounded-md border border-border bg-bg px-2 text-sm"
+                  >
+                    <option value="MB">MB</option>
+                    <option value="GB">GB</option>
+                    <option value="TB">TB</option>
+                  </select>
+                </div>
+                <p className="mt-1 text-xs text-muted">Current: {quota ? formatBytes(quota) : "10 GB"}</p>
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              className="mt-4"
+              disabled={savingLimits}
+              onClick={async () => {
+                const finalMax = maxObjectVal * (maxObjectUnit === "GB" ? 1024 * 1024 * 1024 : 1024 * 1024);
+                const finalQuota = quotaVal * (quotaUnit === "TB" ? 1024 ** 4 : quotaUnit === "GB" ? 1024 * 1024 * 1024 : 1024 * 1024);
+                if (finalQuota < finalMax) {
+                  toast.error("Account quota must be at least the max upload size.");
+                  return;
+                }
+                setSavingLimits(true);
+                try {
+                  const res = await updateStorageLimitsFn({ data: { maxObject: finalMax, quota: finalQuota } });
+                  if (res.ok) {
+                    setMaxObject(finalMax);
+                    setQuota(finalQuota);
+                    toast.success(`Storage limits saved: Max object ${formatBytes(finalMax)}, Quota ${formatBytes(finalQuota)}`);
+                  } else {
+                    toast.error(res.error || "Failed to update storage limits.");
+                  }
+                } catch {
+                  toast.error("Failed to update storage limits.");
+                } finally {
+                  setSavingLimits(false);
+                }
+              }}
+            >
+              {savingLimits ? "Saving limits…" : "Save storage limits"}
+            </Button>
           </section>
 
           <section className="rounded-lg border border-border bg-surface p-4">

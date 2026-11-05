@@ -333,3 +333,105 @@ test("S3 endpoint: DeleteObjects respects Quiet mode", async () => {
   // In quiet mode, successfully deleted items are omitted
   assert.doesNotMatch(xml, /<Deleted>/);
 });
+
+test("S3 endpoint: Bucket and Object ACL support and anonymous access", async () => {
+  const ownerId = `s3-acl-user-${Date.now()}`;
+  await createBucket(ownerId, "s3-acl-bucket", "private");
+  const keyRes = await createKey(ownerId, "AclTestKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // 1. GET bucket ACL (initially private)
+  const getBktAclReq = new Request("http://localhost:8080/api/s3/s3-acl-bucket?acl", {
+    method: "GET",
+    headers: { authorization: authHeader },
+  });
+  const getBktAclRes = await handleS3(getBktAclReq);
+  assert.equal(getBktAclRes.status, 200);
+  const bktAclXml1 = await getBktAclRes.text();
+  assert.match(bktAclXml1, /<AccessControlPolicy/);
+  assert.match(bktAclXml1, /<Permission>FULL_CONTROL<\/Permission>/);
+  assert.doesNotMatch(bktAclXml1, /AllUsers/);
+
+  // 2. PUT bucket ACL with x-amz-acl: public-read
+  const putBktAclReq = new Request("http://localhost:8080/api/s3/s3-acl-bucket?acl", {
+    method: "PUT",
+    headers: {
+      authorization: authHeader,
+      "x-amz-acl": "public-read",
+    },
+  });
+  const putBktAclRes = await handleS3(putBktAclReq);
+  assert.equal(putBktAclRes.status, 200);
+
+  // Verify bucket ACL XML now has READ grant to AllUsers
+  const getBktAclRes2 = await handleS3(getBktAclReq);
+  const bktAclXml2 = await getBktAclRes2.text();
+  assert.match(bktAclXml2, /AllUsers/);
+  assert.match(bktAclXml2, /<Permission>READ<\/Permission>/);
+
+  // Reset bucket to private
+  await handleS3(
+    new Request("http://localhost:8080/api/s3/s3-acl-bucket?acl", {
+      method: "PUT",
+      headers: { authorization: authHeader, "x-amz-acl": "private" },
+    }),
+  );
+
+  // 3. PUT object with x-amz-acl: public-read in private bucket
+  const putObjReq = new Request("http://localhost:8080/api/s3/s3-acl-bucket/public-item.txt", {
+    method: "PUT",
+    headers: {
+      authorization: authHeader,
+      "content-type": "text/plain",
+      "x-amz-acl": "public-read",
+    },
+    body: "Public Content",
+  });
+  const putObjRes = await handleS3(putObjReq);
+  assert.equal(putObjRes.status, 200);
+
+  // 4. Anonymous GET should succeed for this public-read object!
+  const anonGetReq = new Request("http://localhost:8080/api/s3/s3-acl-bucket/public-item.txt", {
+    method: "GET",
+  });
+  const anonGetRes = await handleS3(anonGetReq);
+  assert.equal(anonGetRes.status, 200);
+  assert.equal(await anonGetRes.text(), "Public Content");
+
+  // 5. GET object ACL
+  const getObjAclReq = new Request(
+    "http://localhost:8080/api/s3/s3-acl-bucket/public-item.txt?acl",
+    {
+      method: "GET",
+      headers: { authorization: authHeader },
+    },
+  );
+  const getObjAclRes = await handleS3(getObjAclReq);
+  assert.equal(getObjAclRes.status, 200);
+  const objAclXml = await getObjAclRes.text();
+  assert.match(objAclXml, /AllUsers/);
+
+  // 6. PUT object ACL back to private
+  const putObjAclReq = new Request(
+    "http://localhost:8080/api/s3/s3-acl-bucket/public-item.txt?acl",
+    {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "x-amz-acl": "private",
+      },
+    },
+  );
+  const putObjAclRes = await handleS3(putObjAclReq);
+  assert.equal(putObjAclRes.status, 200);
+
+  // 7. Anonymous GET now returns 403 AccessDenied
+  const anonGetReq2 = new Request("http://localhost:8080/api/s3/s3-acl-bucket/public-item.txt", {
+    method: "GET",
+  });
+  const anonGetRes2 = await handleS3(anonGetReq2);
+  assert.equal(anonGetRes2.status, 403);
+});

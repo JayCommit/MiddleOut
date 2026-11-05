@@ -92,18 +92,24 @@ test("console parts cannot exceed reserved bytes or use extra part numbers", asy
 
 test("pending reservations and concurrent console/S3 writers share the same quota", async () => {
   const { owner, bucket } = await fixture("quota");
-  for (let i = 0; i < 7; i++)
+  const limits = await q.getActiveLimits();
+  const targetReserve = limits.quota - 8 * 1024 * 1024;
+  const numChunks = Math.max(1, Math.ceil(targetReserve / Math.floor(limits.maxObject * 0.9)));
+  const partSize = Math.floor(targetReserve / numChunks);
+  for (let i = 0; i < numChunks; i++) {
+    const size = i === numChunks - 1 ? targetReserve - (numChunks - 1) * partSize : partSize;
     assert.equal(
       (
         await q.beginUpload(owner, {
           bucket,
           key: `reserved-${i}`,
-          size: MAX_OBJECT_BYTES,
+          size,
           contentType: "application/octet-stream",
         })
       ).ok,
       true,
     );
+  }
   const mp = await q.initiateMultipartUpload(owner, bucket, "multipart", "text/plain", {});
   assert.ok(mp.ok);
   const bytes = Buffer.alloc(5 * 1024 * 1024);
@@ -121,8 +127,8 @@ test("pending reservations and concurrent console/S3 writers share the same quot
   const sql = await getSql();
   const usage = await sql<{
     bytes: number;
-  }>`select sum(size)::int as bytes from mo_objects o join mo_buckets b on b.id=o.bucket_id where b.owner_id=${owner}`;
-  assert.ok(Number(usage[0].bytes) <= MAX_ACCOUNT_BYTES);
+  }>`select coalesce(sum(size), 0)::bigint as bytes from mo_objects o join mo_buckets b on b.id=o.bucket_id where b.owner_id=${owner}`;
+  assert.ok(Number(usage[0].bytes) <= limits.quota);
 });
 
 test("part-write failures roll back single PUT and multipart completion", async () => {
