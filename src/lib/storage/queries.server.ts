@@ -82,6 +82,50 @@ async function accountBytes(sql: Sql, ownerId: string): Promise<number> {
   return asNum(rows[0]?.bytes) + asNum(mpRows[0]?.bytes);
 }
 
+export async function getActiveLimits(sql?: Sql) {
+  const db = sql ?? (await getSql());
+  let maxObject = MAX_OBJECT_BYTES;
+  let quota = MAX_ACCOUNT_BYTES;
+  try {
+    const rows = await db<{ key: string; value: string }>`
+      select key, value from mo_settings where key in ('max_object_bytes', 'account_quota_bytes')
+    `;
+    for (const row of rows) {
+      if (row.key === "max_object_bytes") {
+        const n = Number(row.value);
+        if (Number.isSafeInteger(n) && n > 0) maxObject = n;
+      } else if (row.key === "account_quota_bytes") {
+        const n = Number(row.value);
+        if (Number.isSafeInteger(n) && n > 0) quota = n;
+      }
+    }
+  } catch {
+    // mo_settings table might not be created yet during early init/tests
+  }
+  return { maxObject, quota };
+}
+
+export async function updateStorageLimits(ownerId: string, maxObject: number, quota: number) {
+  if (!Number.isSafeInteger(maxObject) || maxObject < 1) {
+    return { ok: false as const, error: "Max upload size must be at least 1 byte." };
+  }
+  if (!Number.isSafeInteger(quota) || quota < maxObject) {
+    return { ok: false as const, error: "Account quota must be at least the max upload size." };
+  }
+  await ensureAccount(ownerId);
+  const sql = await getSql();
+  await sql`
+    insert into mo_settings (key, value, updated_at) values ('max_object_bytes', ${String(maxObject)}, now())
+    on conflict (key) do update set value = ${String(maxObject)}, updated_at = now()
+  `;
+  await sql`
+    insert into mo_settings (key, value, updated_at) values ('account_quota_bytes', ${String(quota)}, now())
+    on conflict (key) do update set value = ${String(quota)}, updated_at = now()
+  `;
+  await audit(sql, ownerId, "settings.limits", `max_object=${formatBytes(maxObject)} quota=${formatBytes(quota)}`);
+  return { ok: true as const, maxObject, quota };
+}
+
 const MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0e1211"/><path d="M6.2 8.2 L13.6 16 L6.2 23.8" fill="none" stroke="#e7eee9" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M25.8 8.2 L18.4 16 L25.8 23.8" fill="none" stroke="#e7eee9" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/><rect x="14.15" y="14.35" width="3.7" height="3.3" rx="0.45" fill="#e2a23a"/></svg>`;
 
 async function freeName(sql: Sql, base: string, ownerId: string): Promise<string> {
@@ -171,29 +215,32 @@ export async function ensureAccount(ownerId: string): Promise<void> {
   });
 }
 
-function mapBucket(row: BucketRow) {
+function mapBucket(row: BucketRow & { acl?: string }) {
+  const isPublic = asBool(row.is_public);
   return {
     id: row.id,
     name: row.name,
-    isPublic: asBool(row.is_public),
+    isPublic,
     region: row.region,
     createdAt: iso(row.created_at),
     objectCount: asNum(row.object_count),
     bytes: asNum(row.bytes),
+    acl: row.acl || (isPublic ? "public-read" : "private"),
   };
 }
 
 export async function overview(ownerId: string) {
   await ensureAccount(ownerId);
   const sql = await getSql();
-  const buckets = await sql<BucketRow>`
+  const buckets = await sql<BucketRow & { acl?: string }>`
     select b.id, b.name, b.is_public, b.region, b.created_at,
+      coalesce(b.acl, case when b.is_public then 'public-read' else 'private' end) as acl,
       count(o.id)::int as object_count,
       coalesce(sum(o.size), 0)::bigint as bytes
     from mo_buckets b
     left join mo_objects o on o.bucket_id = b.id and o.complete = true
     where b.owner_id = ${ownerId}
-    group by b.id, b.name, b.is_public, b.region, b.created_at
+    group by b.id, b.name, b.is_public, b.region, b.created_at, b.acl
     order by b.created_at desc
   `;
   const mapped = buckets.map(mapBucket);
@@ -206,6 +253,7 @@ export async function overview(ownerId: string) {
   const account = await sql<{
     region: string;
   }>`select region from mo_accounts where owner_id = ${ownerId}`;
+  const limits = await getActiveLimits(sql);
   return {
     buckets: mapped,
     stats: {
@@ -221,11 +269,15 @@ export async function overview(ownerId: string) {
       createdAt: iso(row.created_at),
     })),
     region: account[0]?.region ?? "us-east-1",
-    quota: MAX_ACCOUNT_BYTES,
+    quota: limits.quota,
   };
 }
 
-export async function createBucket(ownerId: string, rawName: string, isPublic: boolean) {
+export async function createBucket(
+  ownerId: string,
+  rawName: string,
+  isPublicOrAcl: boolean | string = false,
+) {
   const nameError = validateBucketName(rawName);
   if (nameError) return { ok: false as const, error: nameError };
   const name = normalizeBucketName(rawName);
@@ -253,21 +305,73 @@ export async function createBucket(ownerId: string, rawName: string, isPublic: b
     region: string;
   }>`select region from mo_accounts where owner_id = ${ownerId}`;
   const region = account[0]?.region ?? "us-east-1";
-  await sql`insert into mo_buckets (id, owner_id, name, is_public, region) values (${randomUUID()}, ${ownerId}, ${name}, ${isPublic}, ${region})`;
+  const acl =
+    typeof isPublicOrAcl === "string"
+      ? isPublicOrAcl
+      : isPublicOrAcl
+        ? "public-read"
+        : "private";
+  const isPublic = acl === "public-read" || acl === "public-read-write";
+  await sql`insert into mo_buckets (id, owner_id, name, is_public, region, acl) values (${randomUUID()}, ${ownerId}, ${name}, ${isPublic}, ${region}, ${acl})`;
   await audit(sql, ownerId, "bucket.create", name);
-  return { ok: true as const, name };
+  return { ok: true as const, name, acl, isPublic };
 }
 
 export async function setBucketAccess(ownerId: string, name: string, isPublic: boolean) {
   const sql = await getSql();
+  const acl = isPublic ? "public-read" : "private";
   const rows = await sql<{ id: string }>`
-    update mo_buckets set is_public = ${isPublic}
+    update mo_buckets set is_public = ${isPublic}, acl = ${acl}
     where name = ${name} and owner_id = ${ownerId}
     returning id
   `;
   if (!rows[0]) return { ok: false as const, error: "Bucket not found." };
   await audit(sql, ownerId, "bucket.acl", `${name} ${isPublic ? "public" : "private"}`);
   return { ok: true as const };
+}
+
+export async function setBucketAcl(ownerId: string, name: string, acl: string) {
+  const allowed = ["private", "public-read", "public-read-write", "authenticated-read"];
+  if (!allowed.includes(acl)) return { ok: false as const, error: "Invalid canned ACL." };
+  const isPublic = acl === "public-read" || acl === "public-read-write";
+  const sql = await getSql();
+  const rows = await sql<{ id: string }>`
+    update mo_buckets set acl = ${acl}, is_public = ${isPublic}
+    where name = ${name} and owner_id = ${ownerId}
+    returning id
+  `;
+  if (!rows[0]) return { ok: false as const, error: "NoSuchBucket" };
+  await audit(sql, ownerId, "bucket.acl", `${name} ${acl}`);
+  return { ok: true as const, acl, isPublic };
+}
+
+export async function getBucketAcl(ownerId: string | null, name: string) {
+  const sql = await getSql();
+  const rows = await sql<{
+    id: string;
+    owner_id: string;
+    name: string;
+    is_public: unknown;
+    region: string;
+    acl?: string;
+  }>`
+    select id, owner_id, name, is_public, region,
+      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl
+    from mo_buckets where name = ${name}
+  `;
+  const bucket = rows[0];
+  if (!bucket) return { ok: false as const, error: "NoSuchBucket" as const };
+  const isOwner = ownerId !== null && bucket.owner_id === ownerId;
+  const isPublic = asBool(bucket.is_public);
+  const acl = bucket.acl || (isPublic ? "public-read" : "private");
+  if (!isOwner && !isPublic) return { ok: false as const, error: "AccessDenied" as const };
+  return {
+    ok: true as const,
+    ownerId: bucket.owner_id,
+    bucket: bucket.name,
+    acl,
+    isPublic,
+  };
 }
 
 export async function deleteBucket(ownerId: string, name: string, force: boolean) {
@@ -296,8 +400,14 @@ async function ownedBucket(sql: Sql, ownerId: string, name: string) {
     is_public: unknown;
     region: string;
     created_at: unknown;
+    acl?: string;
+    cors_rules?: string | null;
+    policy?: string | null;
   }>`
-    select id, name, is_public, region, created_at from mo_buckets where name = ${name} and owner_id = ${ownerId}
+    select id, name, is_public, region, created_at,
+      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl,
+      cors_rules, policy
+    from mo_buckets where name = ${name} and owner_id = ${ownerId}
   `;
   return rows[0] ?? null;
 }
@@ -306,6 +416,10 @@ export async function browse(ownerId: string, name: string, prefix: string, star
   const sql = await getSql();
   const bucket = await ownedBucket(sql, ownerId, name);
   if (!bucket) return { ok: false as const, error: "Bucket not found." };
+  const countStats = await sql<{ count: unknown; bytes: unknown }>`
+    select count(*)::int as count, coalesce(sum(size), 0)::bigint as bytes
+    from mo_objects where bucket_id = ${bucket.id} and complete = true
+  `;
   const rows = await sql<{
     key: string;
     size: unknown;
@@ -313,8 +427,9 @@ export async function browse(ownerId: string, name: string, prefix: string, star
     updated_at: unknown;
     content_type: string;
     id: string;
+    acl?: string;
   }>`
-    select id, key, size, etag, updated_at, content_type
+    select id, key, size, etag, updated_at, content_type, coalesce(acl, 'private') as acl
     from mo_objects
     where bucket_id = ${bucket.id} and complete = true and key like ${likePrefix(prefix)} escape '\\' and key > ${startAfter}
     order by key
@@ -327,6 +442,7 @@ export async function browse(ownerId: string, name: string, prefix: string, star
     etag: row.etag,
     updatedAt: iso(row.updated_at),
     contentType: row.content_type,
+    acl: row.acl || "private",
   }));
   const page = groupListing(mapped, {
     prefix,
@@ -338,10 +454,16 @@ export async function browse(ownerId: string, name: string, prefix: string, star
   return {
     ok: true as const,
     bucket: {
+      id: bucket.id,
       name: bucket.name,
       isPublic: asBool(bucket.is_public),
       region: bucket.region,
       createdAt: iso(bucket.created_at),
+      acl: bucket.acl || (asBool(bucket.is_public) ? "public-read" : "private"),
+      corsRules: bucket.cors_rules || "[]",
+      policy: bucket.policy ?? null,
+      objectCount: asNum(countStats[0]?.count),
+      totalBytes: asNum(countStats[0]?.bytes),
     },
     prefix,
     folders: page.prefixes,
@@ -367,13 +489,15 @@ export async function putBytes(
   bytes: Buffer,
   contentType: string,
   headers: Record<string, string>,
+  acl = "private",
 ) {
+  const { maxObject, quota } = await getActiveLimits();
   const keyError = validateKey(key);
   if (keyError) return { ok: false as const, error: keyError, code: "InvalidArgument" };
-  if (bytes.length > MAX_OBJECT_BYTES) {
+  if (bytes.length > maxObject) {
     return {
       ok: false as const,
-      error: `Objects are limited to ${formatBytes(MAX_OBJECT_BYTES)}.`,
+      error: `Objects are limited to ${formatBytes(maxObject)}.`,
       code: "EntityTooLarge",
     };
   }
@@ -387,15 +511,16 @@ export async function putBytes(
   `;
     const used = await accountBytes(sql, ownerId);
     const previous = asNum(existing[0]?.size);
-    if (used - previous + bytes.length > MAX_ACCOUNT_BYTES) {
+    if (used - previous + bytes.length > quota) {
       return { ok: false as const, error: "Account storage limit reached.", code: "QuotaExceeded" };
     }
     await sql`delete from mo_objects where bucket_id = ${bucket.id} and key = ${key} and complete = true`;
     const id = randomUUID();
     const etag = createHash("md5").update(bytes).digest("hex");
     const safeHeaders = sanitizeHeaders(headers);
-    await sql`insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers)
-    values (${id}, ${bucket.id}, ${key}, ${bytes.length}, ${contentType || "application/octet-stream"}, ${etag}, ${true}, ${JSON.stringify(safeHeaders)})`;
+    const safeAcl = acl === "public-read" ? "public-read" : "private";
+    await sql`insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers, acl)
+    values (${id}, ${bucket.id}, ${key}, ${bytes.length}, ${contentType || "application/octet-stream"}, ${etag}, ${true}, ${JSON.stringify(safeHeaders)}, ${safeAcl})`;
     await insertBytes(sql, id, bytes);
     await audit(sql, ownerId, "object.put", `${bucketName}/${key}`);
     return { ok: true as const, id, etag, size: bytes.length };
@@ -416,14 +541,15 @@ async function activeUploadCount(sql: Sql, ownerId: string): Promise<number> {
 
 export async function beginUpload(
   ownerId: string,
-  input: { bucket: string; key: string; size: number; contentType: string },
+  input: { bucket: string; key: string; size: number; contentType: string; acl?: string },
 ) {
+  const { maxObject, quota } = await getActiveLimits();
   const keyError = validateKey(input.key);
   if (keyError) return { ok: false as const, error: keyError };
-  if (!Number.isInteger(input.size) || input.size < 0 || input.size > MAX_OBJECT_BYTES) {
+  if (!Number.isInteger(input.size) || input.size < 0 || input.size > maxObject) {
     return {
       ok: false as const,
-      error: `Objects are limited to ${formatBytes(MAX_OBJECT_BYTES)}.`,
+      error: `Objects are limited to ${formatBytes(maxObject)}.`,
     };
   }
   await ensureAccount(ownerId);
@@ -436,21 +562,23 @@ export async function beginUpload(
     }
 
     const used = await accountBytes(sql, ownerId);
-    if (used + input.size > MAX_ACCOUNT_BYTES) {
+    if (used + input.size > quota) {
       return {
         ok: false as const,
-        error: `Account storage limit reached (${formatBytes(MAX_ACCOUNT_BYTES)}).`,
+        error: `Account storage limit reached (${formatBytes(quota)}).`,
       };
     }
     const id = randomUUID();
-    await sql`insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers)
-    values (${id}, ${bucket.id}, ${input.key}, ${Math.round(input.size)}, ${input.contentType || "application/octet-stream"}, ${""}, ${false}, ${"{}"})`;
+    const safeAcl = input.acl === "public-read" ? "public-read" : "private";
+    await sql`insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers, acl)
+    values (${id}, ${bucket.id}, ${input.key}, ${Math.round(input.size)}, ${input.contentType || "application/octet-stream"}, ${""}, ${false}, ${"{}"}, ${safeAcl})`;
     return { ok: true as const, id };
   });
 }
 
 export async function writePart(ownerId: string, objectId: string, part: number, data: string) {
-  if (!Number.isInteger(part) || part < 0 || part >= Math.ceil(MAX_OBJECT_BYTES / CHUNK_BYTES))
+  const { maxObject } = await getActiveLimits();
+  if (!Number.isInteger(part) || part < 0 || part >= Math.ceil(maxObject / CHUNK_BYTES))
     return { ok: false as const, error: "Bad part." };
   let buf: Buffer;
   try {
@@ -511,7 +639,8 @@ export async function finishUpload(ownerId: string, objectId: string) {
     }
     if (total !== asNum(row.size))
       return { ok: false as const, error: "Upload size did not match." };
-    if ((await accountBytes(sql, ownerId)) > MAX_ACCOUNT_BYTES)
+    const { quota } = await getActiveLimits(sql);
+    if ((await accountBytes(sql, ownerId)) > quota)
       return { ok: false as const, error: "Account storage limit reached." };
     const etag = hash.digest("hex");
     await sql`delete from mo_objects where bucket_id = ${row.bucket_id} and key = ${row.key} and complete = true`;
@@ -625,8 +754,9 @@ async function tagsFor(sql: Sql, objectId: string) {
 
 export async function objectDetail(ownerId: string, bucketName: string, key: string) {
   const sql = await getSql();
-  const rows = await sql<ObjectRow & { part_count: unknown }>`
+  const rows = await sql<ObjectRow & { part_count: unknown; acl?: string }>`
     select o.id, o.key, o.size, o.content_type, o.etag, o.updated_at, o.headers,
+      coalesce(o.acl, 'private') as acl,
       (select count(*)::int from mo_parts p where p.object_id = o.id) as part_count
     from mo_objects o
     join mo_buckets b on b.id = o.bucket_id
@@ -644,9 +774,56 @@ export async function objectDetail(ownerId: string, bucketName: string, key: str
       etag: row.etag,
       updatedAt: iso(row.updated_at),
       partCount: asNum(row.part_count),
+      acl: row.acl || "private",
       tags: await tagsFor(sql, row.id),
     },
   };
+}
+
+export async function getObjectAcl(ownerId: string | null, bucketName: string, key: string) {
+  const sql = await getSql();
+  const rows = await sql<{
+    bucket_id: string;
+    owner_id: string;
+    is_public: unknown;
+    obj_id: string;
+    obj_acl?: string;
+  }>`
+    select b.id as bucket_id, b.owner_id, b.is_public, o.id as obj_id,
+      coalesce(o.acl, 'private') as obj_acl
+    from mo_buckets b
+    join mo_objects o on o.bucket_id = b.id
+    where b.name = ${bucketName} and o.key = ${key} and o.complete = true
+  `;
+  const record = rows[0];
+  if (!record) return { ok: false as const, error: "NoSuchKey" as const };
+  const isOwner = ownerId !== null && record.owner_id === ownerId;
+  const isPublic = asBool(record.is_public) || record.obj_acl === "public-read";
+  if (!isOwner && !isPublic) return { ok: false as const, error: "AccessDenied" as const };
+
+  return {
+    ok: true as const,
+    ownerId: record.owner_id,
+    bucket: bucketName,
+    key,
+    acl: record.obj_acl || "private",
+    isPublic,
+  };
+}
+
+export async function setObjectAcl(ownerId: string, bucketName: string, key: string, acl: string) {
+  const allowed = ["private", "public-read", "bucket-owner-full-control"];
+  const cleanAcl = allowed.includes(acl) ? (acl === "bucket-owner-full-control" ? "private" : acl) : "private";
+  const sql = await getSql();
+  const rows = await sql<{ id: string }>`
+    update mo_objects set acl = ${cleanAcl}, updated_at = now()
+    where bucket_id = (select id from mo_buckets where name = ${bucketName} and owner_id = ${ownerId})
+      and key = ${key} and complete = true
+    returning id
+  `;
+  if (!rows[0]) return { ok: false as const, error: "NoSuchKey" };
+  await audit(sql, ownerId, "object.acl", `${bucketName}/${key} ${cleanAcl}`);
+  return { ok: true as const, acl: cleanAcl };
 }
 
 export async function readPartForOwner(ownerId: string, objectId: string, part: number) {
@@ -839,10 +1016,11 @@ export async function getSettings(ownerId: string) {
   const rows = await sql<{
     region: string;
   }>`select region from mo_accounts where owner_id = ${ownerId}`;
+  const { maxObject, quota } = await getActiveLimits(sql);
   return {
     region: rows[0]?.region ?? "us-east-1",
-    quota: MAX_ACCOUNT_BYTES,
-    maxObject: MAX_OBJECT_BYTES,
+    quota,
+    maxObject,
     origin: new URL(process.env.BETTER_AUTH_URL || "http://localhost:8080").origin,
     backend: process.env.DATABASE_URL?.trim() ? "Postgres" : "Embedded Postgres",
     version: "0.2.0",
@@ -1107,6 +1285,7 @@ export type S3Object = {
   updatedAt: string;
   headers: Record<string, string>;
   bytes: Buffer;
+  acl?: string;
 };
 
 export async function readObjectFor(ownerId: string | null, bucketName: string, key: string) {
@@ -1117,23 +1296,28 @@ export async function readObjectFor(ownerId: string | null, bucketName: string, 
     is_public: unknown;
     region: string;
     policy: string | null;
+    acl?: string;
   }>`
-    select id, owner_id, is_public, region, policy from mo_buckets where name = ${bucketName}
+    select id, owner_id, is_public, region, policy,
+      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl
+    from mo_buckets where name = ${bucketName}
   `;
   const bucket = buckets[0];
   if (!bucket) return { error: "NoSuchBucket" as const };
   if (bucket.policy !== null) return { error: "AccessDenied" as const };
   const owns = ownerId !== null && bucket.owner_id === ownerId;
   const isPublic = asBool(bucket.is_public);
-  if (!owns && !isPublic) return { error: "AccessDenied" as const };
 
-  const rows = await sql<ObjectRow>`
+  const rows = await sql<ObjectRow & { acl?: string }>`
     select o.id, o.key, o.size, o.content_type, o.etag, o.updated_at, o.headers,
+      coalesce(o.acl, 'private') as acl,
       (select coalesce(json_agg(p.data order by p.part), '[]'::json) from mo_parts p where p.object_id=o.id) as data_parts
     from mo_objects o where bucket_id = ${bucket.id} and key = ${key} and complete = true
   `;
   const row = rows[0];
   if (!row) return { error: "NoSuchKey" as const, bucket };
+  const objectIsPublic = row.acl === "public-read";
+  if (!owns && !isPublic && !objectIsPublic) return { error: "AccessDenied" as const };
   return {
     bucket,
     object: {
@@ -1145,6 +1329,7 @@ export async function readObjectFor(ownerId: string | null, bucketName: string, 
       updatedAt: iso(row.updated_at),
       headers: parseHeaders(row.headers),
       bytes: objectBytes(row.data_parts),
+      acl: row.acl || "private",
     } satisfies S3Object,
   };
 }
@@ -1214,10 +1399,19 @@ export async function bucketRecord(name: string) {
     region: string;
     name: string;
     policy: string | null;
+    acl?: string;
   }>`
-    select id, owner_id, is_public, region, name, policy from mo_buckets where name = ${name}
+    select id, owner_id, is_public, region, name, policy,
+      coalesce(acl, case when is_public then 'public-read' else 'private' end) as acl
+    from mo_buckets where name = ${name}
   `;
-  return rows[0] ? { ...rows[0], isPublic: asBool(rows[0].is_public) } : null;
+  return rows[0]
+    ? {
+        ...rows[0],
+        isPublic: asBool(rows[0].is_public),
+        acl: rows[0].acl || (asBool(rows[0].is_public) ? "public-read" : "private"),
+      }
+    : null;
 }
 
 export async function copyObject(
@@ -1282,6 +1476,7 @@ export async function uploadMultipartPart(
   partNumber: number,
   data: Buffer,
 ) {
+  const { maxObject, quota } = await getActiveLimits();
   if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
     return {
       ok: false as const,
@@ -1289,10 +1484,10 @@ export async function uploadMultipartPart(
       code: "InvalidArgument",
     };
   }
-  if (data.length > MAX_OBJECT_BYTES) {
+  if (data.length > maxObject) {
     return {
       ok: false as const,
-      error: `Part exceeds maximum object size.`,
+      error: `Part exceeds maximum object size of ${formatBytes(maxObject)}.`,
       code: "EntityTooLarge",
     };
   }
@@ -1310,7 +1505,7 @@ export async function uploadMultipartPart(
     select size from mo_multipart_parts where upload_id = ${uploadId} and part_number = ${partNumber}
   `;
     const prevSize = asNum(existingPart[0]?.size);
-    if (used - prevSize + data.length > MAX_ACCOUNT_BYTES) {
+    if (used - prevSize + data.length > quota) {
       return { ok: false as const, error: "Account storage limit reached.", code: "QuotaExceeded" };
     }
 
@@ -1408,10 +1603,11 @@ export async function completeMultipartUpload(
       totalSize += buf.length;
     }
 
-    if (totalSize > MAX_OBJECT_BYTES) {
+    const { maxObject, quota } = await getActiveLimits(sql);
+    if (totalSize > maxObject) {
       return {
         ok: false as const,
-        error: `Object size exceeds maximum limit.`,
+        error: `Object size exceeds maximum limit of ${formatBytes(maxObject)}.`,
         code: "EntityTooLarge",
       };
     }
@@ -1422,9 +1618,11 @@ export async function completeMultipartUpload(
     const objectBytes = Buffer.concat(buffers);
     await sql`delete from mo_objects where bucket_id = ${upload.bucket_id} and key = ${upload.key} and complete = true`;
     const objectId = randomUUID();
+    const uploadHeaders = parseHeaders(upload.headers);
+    const uploadAcl = uploadHeaders["x-amz-acl"] === "public-read" ? "public-read" : "private";
     await sql`
-    insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers)
-    values (${objectId}, ${upload.bucket_id}, ${upload.key}, ${totalSize}, ${upload.content_type}, ${multipartEtag}, ${true}, ${upload.headers})
+    insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers, acl)
+    values (${objectId}, ${upload.bucket_id}, ${upload.key}, ${totalSize}, ${upload.content_type}, ${multipartEtag}, ${true}, ${upload.headers}, ${uploadAcl})
   `;
     await insertBytes(sql, objectId, objectBytes);
     await sql`delete from mo_multipart_uploads where id = ${uploadId}`;

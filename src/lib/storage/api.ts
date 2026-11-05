@@ -14,13 +14,14 @@ export const fetchOverview = createServerFn({ method: "GET" })
 
 export const createBucketFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { name: string; isPublic: boolean }) => ({
+  .validator((input: { name: string; isPublic?: boolean; acl?: string }) => ({
     name: asStr(input?.name, 128),
     isPublic: Boolean(input?.isPublic),
+    acl: typeof input?.acl === "string" ? asStr(input.acl, 32) : undefined,
   }))
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
-    return q.createBucket(context.userId, data.name, data.isPublic);
+    return q.createBucket(context.userId, data.name, data.acl ?? data.isPublic);
   });
 
 export const setBucketAccessFn = createServerFn({ method: "POST" })
@@ -32,6 +33,82 @@ export const setBucketAccessFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const q = await import("./queries.server");
     return q.setBucketAccess(context.userId, data.name, data.isPublic);
+  });
+
+export const setBucketAclFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { name: string; acl: string }) => ({
+    name: asStr(input?.name, 128),
+    acl: asStr(input?.acl, 32),
+  }))
+  .handler(async ({ context, data }) => {
+    const q = await import("./queries.server");
+    return q.setBucketAcl(context.userId, data.name, data.acl);
+  });
+
+export const getBucketAclFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { name: string }) => ({
+    name: asStr(input?.name, 128),
+  }))
+  .handler(async ({ context, data }) => {
+    const q = await import("./queries.server");
+    return q.getBucketAcl(context.userId, data.name);
+  });
+
+export const setObjectAclFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { bucket: string; key: string; acl: string }) => ({
+    bucket: asStr(input?.bucket, 128),
+    key: asStr(input?.key, 1024),
+    acl: asStr(input?.acl, 32),
+  }))
+  .handler(async ({ context, data }) => {
+    const q = await import("./queries.server");
+    return q.setObjectAcl(context.userId, data.bucket, data.key, data.acl);
+  });
+
+export const getObjectAclFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { bucket: string; key: string }) => ({
+    bucket: asStr(input?.bucket, 128),
+    key: asStr(input?.key, 1024),
+  }))
+  .handler(async ({ context, data }) => {
+    const q = await import("./queries.server");
+    return q.getObjectAcl(context.userId, data.bucket, data.key);
+  });
+
+export const getBucketCorsFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { name: string }) => ({
+    name: asStr(input?.name, 128),
+  }))
+  .handler(async ({ context, data }) => {
+    const q = await import("./queries.server");
+    return q.getBucketCors(context.userId, data.name);
+  });
+
+export const setBucketCorsFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { name: string; corsRules: string }) => ({
+    name: asStr(input?.name, 128),
+    corsRules: asStr(input?.corsRules, 65536),
+  }))
+  .handler(async ({ context, data }) => {
+    const q = await import("./queries.server");
+    return q.setBucketCors(context.userId, data.name, data.corsRules);
+  });
+
+export const updateStorageLimitsFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { maxObject: number; quota: number }) => ({
+    maxObject: Number(input?.maxObject),
+    quota: Number(input?.quota),
+  }))
+  .handler(async ({ context, data }) => {
+    const q = await import("./queries.server");
+    return q.updateStorageLimits(context.userId, data.maxObject, data.quota);
   });
 
 export const deleteBucketFn = createServerFn({ method: "POST" })

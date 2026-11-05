@@ -7,12 +7,18 @@ import {
   createBucket,
   createKey,
   createLink,
+  getActiveLimits,
+  getBucketAcl,
+  getObjectAcl,
   getSystemMetrics,
   listShares,
   moveObject,
   putBytes,
   readObjectFor,
   revokeShare,
+  setBucketAcl,
+  setObjectAcl,
+  updateStorageLimits,
 } from "./queries.server.ts";
 
 test("storage features: moveObject copies and deletes source atomically", async () => {
@@ -103,5 +109,82 @@ test("storage features: browse pagination with startAfter cursor", async () => {
   if (page.ok) {
     const keys = page.objects.map((o) => o.key);
     assert.deepEqual(keys, ["item-3.txt", "item-4.txt", "item-5.txt"]);
+  }
+});
+
+test("storage features: admin can dynamically configure upload size max and account quota", async () => {
+  const ownerId = `limits-user-${Date.now()}`;
+  await createBucket(ownerId, "limits-bucket", false);
+
+  try {
+    // Set tight limits: maxObject = 500 bytes, quota = 5000 bytes
+    const updateRes1 = await updateStorageLimits(ownerId, 500, 5000);
+    assert.equal(updateRes1.ok, true);
+
+    const limits1 = await getActiveLimits();
+    assert.equal(limits1.maxObject, 500);
+    assert.equal(limits1.quota, 5000);
+
+    // An upload of 600 bytes should be rejected (size exceeds limit)
+    const bigBuffer = Buffer.alloc(600, "x");
+    const rejected = await putBytes(ownerId, "limits-bucket", "big.txt", bigBuffer, "text/plain", {});
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) {
+      assert.match(rejected.error, /limited to 500 B/);
+    }
+
+    // Admin configures higher limit: maxObject = 2000 bytes
+    const updateRes2 = await updateStorageLimits(ownerId, 2000, 10000);
+    assert.equal(updateRes2.ok, true);
+
+    const limits2 = await getActiveLimits();
+    assert.equal(limits2.maxObject, 2000);
+
+    // The 600-byte upload should now succeed
+    const accepted = await putBytes(ownerId, "limits-bucket", "big.txt", bigBuffer, "text/plain", {});
+    assert.equal(accepted.ok, true);
+  } finally {
+    // Reset back to standard test defaults so other tests aren't constrained
+    await updateStorageLimits(ownerId, 1024 * 1024 * 1024, 10 * 1024 * 1024 * 1024);
+  }
+});
+
+test("storage features: bucket and object ACL management", async () => {
+  const ownerId = `acl-user-${Date.now()}`;
+  await createBucket(ownerId, "acl-test-bucket", "private");
+
+  // Initial bucket ACL is private
+  const bucketAcl1 = await getBucketAcl(ownerId, "acl-test-bucket");
+  assert.equal(bucketAcl1.ok, true);
+  if (bucketAcl1.ok) {
+    assert.equal(bucketAcl1.acl, "private");
+  }
+
+  // Update bucket ACL to public-read
+  const setRes = await setBucketAcl(ownerId, "acl-test-bucket", "public-read");
+  assert.equal(setRes.ok, true);
+
+  const bucketAcl2 = await getBucketAcl(ownerId, "acl-test-bucket");
+  assert.equal(bucketAcl2.ok, true);
+  if (bucketAcl2.ok) {
+    assert.equal(bucketAcl2.acl, "public-read");
+  }
+
+  // Put object with private ACL
+  await putBytes(ownerId, "acl-test-bucket", "doc.txt", Buffer.from("hello"), "text/plain", {}, "private");
+  const objAcl1 = await getObjectAcl(ownerId, "acl-test-bucket", "doc.txt");
+  assert.equal(objAcl1.ok, true);
+  if (objAcl1.ok) {
+    assert.equal(objAcl1.acl, "private");
+  }
+
+  // Update object ACL to public-read
+  const setObjRes = await setObjectAcl(ownerId, "acl-test-bucket", "doc.txt", "public-read");
+  assert.equal(setObjRes.ok, true);
+
+  const objAcl2 = await getObjectAcl(ownerId, "acl-test-bucket", "doc.txt");
+  assert.equal(objAcl2.ok, true);
+  if (objAcl2.ok) {
+    assert.equal(objAcl2.acl, "public-read");
   }
 });

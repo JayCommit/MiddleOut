@@ -12,8 +12,10 @@ import {
   deleteBucketCors,
   deleteBucketPolicy,
   deleteObjectTags,
+  getBucketAcl,
   getBucketCors,
   getBucketPolicy,
+  getObjectAcl,
   getObjectTags,
   initiateMultipartUpload,
   listForS3,
@@ -25,8 +27,10 @@ import {
   removeObject,
   secretForAccessKey,
   setBucketAccess,
+  setBucketAcl,
   setBucketCors,
   setBucketPolicy,
+  setObjectAcl,
   setTags,
   uploadMultipartPart,
 } from "../storage/queries.server.ts";
@@ -280,28 +284,74 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     return withCors(xmlResponse(200, method === "HEAD" ? "" : xml));
   }
 
-  // Bucket ACL
+  // Bucket ACL (GET)
   if (url.searchParams.has("acl") && !key && method === "GET") {
     const record = await bucketRecord(bucket);
     if (!record)
       return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
     if (!ownerId || record.owner_id !== ownerId)
       return withCors(xmlError(403, "AccessDenied", "Access denied.", `/${bucket}`));
-    const allUsers = record.isPublic
-      ? `<Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant>`
-      : "";
-    const xml = `<?xml version="1.0" encoding="UTF-8"?><AccessControlPolicy><Owner><ID>${xmlEscape(ownerId)}</ID><DisplayName>${xmlEscape(ownerId)}</DisplayName></Owner><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>${xmlEscape(ownerId)}</ID></Grantee><Permission>FULL_CONTROL</Permission></Grant>${allUsers}</AccessControlList></AccessControlPolicy>`;
+    const aclRes = await getBucketAcl(ownerId, bucket);
+    const isPublicReadWrite = aclRes.ok && aclRes.acl === "public-read-write";
+    const isPublicRead = (aclRes.ok && aclRes.acl === "public-read") || record.isPublic;
+    const allUsers = isPublicReadWrite
+      ? `<Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>WRITE</Permission></Grant>`
+      : isPublicRead
+        ? `<Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant>`
+        : "";
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>${xmlEscape(ownerId)}</ID><DisplayName>${xmlEscape(ownerId)}</DisplayName></Owner><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>${xmlEscape(ownerId)}</ID><DisplayName>${xmlEscape(ownerId)}</DisplayName></Grantee><Permission>FULL_CONTROL</Permission></Grant>${allUsers}</AccessControlList></AccessControlPolicy>`;
     return withCors(xmlResponse(200, xml));
   }
 
+  // Bucket ACL (PUT)
   if (url.searchParams.has("acl") && !key && method === "PUT") {
+    if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
+    const canned = request.headers.get("x-amz-acl") ?? "";
+    const text = body.toString("utf8");
+    let targetAcl: "private" | "public-read" | "public-read-write" | "authenticated-read" = "private";
+    if (canned === "public-read-write" || (text.includes("AllUsers") && text.includes("WRITE"))) {
+      targetAcl = "public-read-write";
+    } else if (canned === "public-read" || text.includes("AllUsers")) {
+      targetAcl = "public-read";
+    } else if (canned === "authenticated-read" || text.includes("AuthenticatedUsers")) {
+      targetAcl = "authenticated-read";
+    } else if (canned === "private") {
+      targetAcl = "private";
+    }
+    const updated = await setBucketAcl(ownerId, bucket, targetAcl);
+    if (!updated.ok) return withCors(xmlError(404, "NoSuchBucket", updated.error, `/${bucket}`));
+    return withCors(new Response(null, { status: 200 }));
+  }
+
+  // Object ACL (GET / HEAD)
+  if (url.searchParams.has("acl") && key && (method === "GET" || method === "HEAD")) {
+    const record = await bucketRecord(bucket);
+    if (!record)
+      return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}/${key}`));
+    const res = await getObjectAcl(ownerId, bucket, key);
+    if (!res.ok) {
+      const code = res.error === "NoSuchKey" ? "NoSuchKey" : "AccessDenied";
+      return withCors(xmlError(code === "NoSuchKey" ? 404 : 403, code, code === "AccessDenied" ? "Access denied." : "The specified key does not exist.", `/${bucket}/${key}`));
+    }
+    const allUsers = res.isPublic
+      ? `<Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant>`
+      : "";
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>${xmlEscape(res.ownerId)}</ID><DisplayName>${xmlEscape(res.ownerId)}</DisplayName></Owner><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>${xmlEscape(res.ownerId)}</ID><DisplayName>${xmlEscape(res.ownerId)}</DisplayName></Grantee><Permission>FULL_CONTROL</Permission></Grant>${allUsers}</AccessControlList></AccessControlPolicy>`;
+    return withCors(xmlResponse(200, method === "HEAD" ? "" : xml));
+  }
+
+  // Object ACL (PUT)
+  if (url.searchParams.has("acl") && key && method === "PUT") {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const canned = request.headers.get("x-amz-acl") ?? "";
     const text = body.toString("utf8");
     const isPublic =
       canned === "public-read" || canned === "public-read-write" || text.includes("AllUsers");
-    const updated = await setBucketAccess(ownerId, bucket, isPublic && canned !== "private");
-    if (!updated.ok) return withCors(xmlError(404, "NoSuchBucket", updated.error, `/${bucket}`));
+    const updated = await setObjectAcl(ownerId, bucket, key, isPublic ? "public-read" : "private");
+    if (!updated.ok) {
+      const status = updated.error === "NoSuchBucket" || updated.error === "NoSuchKey" ? 404 : 403;
+      return withCors(xmlError(status, updated.error, updated.error, `/${bucket}/${key}`));
+    }
     return withCors(new Response(null, { status: 200 }));
   }
 
@@ -704,7 +754,16 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   if (key && method === "PUT") {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
     const type = request.headers.get("content-type") || "application/octet-stream";
-    const written = await putBytes(ownerId, bucket, key, body, type, metaHeaders(request, body));
+    const cannedAcl = request.headers.get("x-amz-acl") || "private";
+    const written = await putBytes(
+      ownerId,
+      bucket,
+      key,
+      body,
+      type,
+      metaHeaders(request, body),
+      cannedAcl,
+    );
     if (!written.ok) {
       const status =
         written.code === "NoSuchBucket" ? 404 : written.code === "EntityTooLarge" ? 400 : 400;

@@ -1,6 +1,8 @@
-export const MAX_OBJECT_BYTES = 8 * 1024 * 1024;
-export const MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
+export const MAX_OBJECT_BYTES = 1024 * 1024 * 1024; // 1 GB default
+export const MAX_ACCOUNT_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB default
 export const CHUNK_BYTES = 192 * 1024;
+
+export type CannedAcl = "private" | "public-read" | "public-read-write" | "authenticated-read";
 
 export const REGIONS = [
   "us-east-1",
@@ -16,7 +18,10 @@ export function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0 B";
   if (n < 1024) return `${Math.round(n)} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  if (n < 1024 * 1024 * 1024 * 1024)
+    return `${(n / (1024 * 1024 * 1024)).toFixed(n < 10 * 1024 * 1024 * 1024 ? 1 : 0)} GB`;
+  return `${(n / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
 }
 
 export function formatWhen(iso: string): string {
@@ -96,6 +101,8 @@ export const ACTION_LABEL: Record<string, string> = {
   "bucket.acl": "Changed access",
   "object.put": "Uploaded",
   "object.delete": "Deleted object",
+  "object.acl": "Changed object access",
+  "settings.limits": "Updated storage limits",
   "key.create": "Created access key",
   "key.revoke": "Revoked access key",
 };
