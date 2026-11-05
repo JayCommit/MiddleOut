@@ -90,8 +90,32 @@ function b64ToBytes(data: string): Uint8Array {
   return out;
 }
 
-export async function downloadObject(objectId: string, partCount: number): Promise<Blob> {
-  if (partCount <= 0) return new Blob([]);
+const SAFE_BLOB_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+  "image/x-icon",
+  "video/mp4",
+  "video/webm",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+  "text/plain",
+  "application/json",
+  "application/octet-stream",
+]);
+
+export async function downloadObject(
+  objectId: string,
+  partCount: number,
+  contentType = "application/octet-stream",
+): Promise<Blob> {
+  const normalized = contentType.split(";", 1)[0].trim().toLowerCase();
+  const safeType = SAFE_BLOB_TYPES.has(normalized) ? normalized : "application/octet-stream";
+  if (partCount <= 0) return new Blob([], { type: safeType });
   const chunks: Uint8Array[] = [];
   for (let part = 0; part < partCount; part += 1) {
     const row = await readPartFn({ data: { objectId, part } });
@@ -103,5 +127,5 @@ export async function downloadObject(objectId: string, partCount: number): Promi
     copy.set(chunk);
     return copy;
   });
-  return new Blob(parts);
+  return new Blob(parts, { type: safeType });
 }

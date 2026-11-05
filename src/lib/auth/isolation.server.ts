@@ -10,10 +10,26 @@ export class CrossSiteRequestError extends Error {
 }
 
 /** Throw `CrossSiteRequestError` for a scripted cross-site/sibling request. */
-export function assertSameSiteRequest(): void {
-  const request = getRequest();
+export function assertSameSiteRequest(req?: Request): void {
+  const request = req ?? getRequest();
   if (!request) return; // no request context (e.g. build) — nothing to guard
   const h = request.headers;
+  const origin = h.get("origin");
+  if (origin) {
+    let reqOrigin = "";
+    let configuredOrigin = "";
+    try {
+      reqOrigin = new URL(request.url).origin;
+      configuredOrigin = process.env.BETTER_AUTH_URL
+        ? new URL(process.env.BETTER_AUTH_URL).origin
+        : reqOrigin;
+    } catch {
+      throw new CrossSiteRequestError();
+    }
+    if (origin === "null" || (origin !== reqOrigin && origin !== configuredOrigin)) {
+      throw new CrossSiteRequestError();
+    }
+  }
   const site = h.get("sec-fetch-site");
   // Non-browser client (no header), the app's own origin, or a direct
   // (address-bar/bookmark) load are all fine.

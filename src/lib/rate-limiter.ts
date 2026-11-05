@@ -22,8 +22,11 @@ export function checkRateLimit(
 
   if (!state) {
     // Bound cardinality under distributed abuse; new clients share overflow capacity.
-    if (buckets.size >= 10000 && key !== "overflow")
-      return checkRateLimit("overflow", maxTokens, refillRatePerSec);
+    // Overflow is per scope (`auth:`, `s3:` …) so one limiter cannot starve another.
+    const scope = key.slice(0, key.indexOf(":") + 1);
+    const overflow = `${scope}overflow`;
+    if (buckets.size >= 10000 && key !== overflow)
+      return checkRateLimit(overflow, maxTokens, refillRatePerSec);
     state = { tokens: maxTokens - 1, lastRefill: now };
     buckets.set(key, state);
     return { allowed: true, retryAfter: 0 };

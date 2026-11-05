@@ -1,4 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { checkRateLimit } from "@/lib/rate-limiter";
+import { transportAddress } from "@/lib/s3/body";
 
 export const Route = createFileRoute("/api/metrics")({
   server: {
@@ -6,10 +8,19 @@ export const Route = createFileRoute("/api/metrics")({
       GET: async ({ request }) => {
         const token = process.env.METRICS_TOKEN;
         if (!token || token.length < 32) return new Response("Metrics disabled", { status: 404 });
-        const { timingSafeEqual } = await import("node:crypto");
-        const supplied = Buffer.from(request.headers.get("authorization") || "");
-        const expected = Buffer.from(`Bearer ${token}`);
-        if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
+        const limit = checkRateLimit(`metrics:${transportAddress(request)}`, 30, 5);
+        if (!limit.allowed) {
+          return new Response("Too many requests", {
+            status: 429,
+            headers: { "retry-after": String(limit.retryAfter) },
+          });
+        }
+        const { createHash, timingSafeEqual } = await import("node:crypto");
+        const rawAuth = request.headers.get("authorization") || "";
+        const expectedRaw = `Bearer ${token}`;
+        const supplied = createHash("sha256").update(rawAuth).digest();
+        const expected = createHash("sha256").update(expectedRaw).digest();
+        if (!timingSafeEqual(supplied, expected) || rawAuth.length !== expectedRaw.length)
           return new Response("Unauthorized", { status: 401 });
         try {
           const { getSystemMetrics } = await import("@/lib/storage/queries.server");

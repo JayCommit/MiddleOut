@@ -106,9 +106,31 @@ function parseAmz(value: string): number | null {
   return Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
 }
 
+const PRESIGNED_PARAMS = new Set([
+  "x-amz-algorithm",
+  "x-amz-credential",
+  "x-amz-date",
+  "x-amz-expires",
+  "x-amz-signedheaders",
+  "x-amz-signature",
+]);
+
 export function parseAuthorization(request: Request): ParsedAuth | { error: string } | null {
   const header = request.headers.get("authorization") ?? "";
   const url = new URL(request.url);
+  const seenPresigned = new Set<string>();
+  let hasDuplicatePresigned = false;
+  url.searchParams.forEach((_, key) => {
+    const lower = key.toLowerCase();
+    if (PRESIGNED_PARAMS.has(lower)) {
+      if (seenPresigned.has(lower)) hasDuplicatePresigned = true;
+      seenPresigned.add(lower);
+    }
+  });
+  const hasPresignedParams = seenPresigned.size > 0;
+  if (header.trim() && hasPresignedParams) {
+    return { error: "Only one authentication mechanism allowed." };
+  }
   if (header.startsWith("AWS4-HMAC-SHA256 ")) {
     const cred = /Credential=([^,\s]+)/.exec(header);
     const signed = /SignedHeaders=([^,\s]+)/.exec(header);
@@ -119,26 +141,52 @@ export function parseAuthorization(request: Request): ParsedAuth | { error: stri
     if (parts.length !== 5) return { error: "Credential scope is malformed." };
     const amzDate = request.headers.get("x-amz-date") ?? "";
     if (!amzDate) return { error: "Missing x-amz-date." };
+    const signedHeaders = signed[1].split(";").filter(Boolean);
+    if (!signedHeaders.some((h) => h.trim().toLowerCase() === "host")) {
+      return { error: "Host header must be in SignedHeaders." };
+    }
     return {
       accessKeyId: parts[0] ?? "",
       dateStamp: parts[1] ?? "",
       region: parts[2] ?? "",
       service: parts[3] ?? "",
-      signedHeaders: signed[1].split(";").filter(Boolean),
+      signedHeaders,
       signature: sig[1].toLowerCase(),
       amzDate,
       expiresSec: null,
       presigned: false,
     };
   }
-  if ((url.searchParams.get("X-Amz-Algorithm") ?? "").toUpperCase() === "AWS4-HMAC-SHA256") {
+  if (header.startsWith("MO ")) {
+    return null;
+  }
+  if (header.trim()) {
+    return { error: "Unsupported or malformed Authorization header." };
+  }
+  if (hasPresignedParams) {
+    if (hasDuplicatePresigned) {
+      return { error: "Presigned URL contains duplicate authentication parameters." };
+    }
+    if ((url.searchParams.get("X-Amz-Algorithm") ?? "").toUpperCase() !== "AWS4-HMAC-SHA256") {
+      return { error: "Presigned URL is malformed." };
+    }
     const cred = url.searchParams.get("X-Amz-Credential") ?? "";
     const signed = url.searchParams.get("X-Amz-SignedHeaders") ?? "";
     const sig = url.searchParams.get("X-Amz-Signature") ?? "";
     const amzDate = url.searchParams.get("X-Amz-Date") ?? "";
-    const expires = Number(url.searchParams.get("X-Amz-Expires") ?? "0");
+    const rawExpires = url.searchParams.get("X-Amz-Expires") ?? "";
+    if (!/^\d+$/.test(rawExpires)) {
+      return { error: "Presigned URL is malformed." };
+    }
+    const expires = Number(rawExpires);
     const parts = cred.split("/");
-    if (parts.length !== 5 || !/^[0-9a-f]{64}$/i.test(sig) || !amzDate) {
+    const signedHeaders = signed.split(";").filter(Boolean);
+    if (
+      parts.length !== 5 ||
+      !/^[0-9a-f]{64}$/i.test(sig) ||
+      !amzDate ||
+      !signedHeaders.some((h) => h.trim().toLowerCase() === "host")
+    ) {
       return { error: "Presigned URL is malformed." };
     }
     return {
@@ -146,10 +194,10 @@ export function parseAuthorization(request: Request): ParsedAuth | { error: stri
       dateStamp: parts[1] ?? "",
       region: parts[2] ?? "",
       service: parts[3] ?? "",
-      signedHeaders: signed.split(";").filter(Boolean),
+      signedHeaders,
       signature: sig.toLowerCase(),
       amzDate,
-      expiresSec: Number.isFinite(expires) ? expires : 0,
+      expiresSec: Number.isSafeInteger(expires) ? expires : 0,
       presigned: true,
     };
   }
@@ -163,6 +211,13 @@ export function verifySigV4(opts: {
   parsed: ParsedAuth;
   now?: number;
 }): { ok: true } | { ok: false; code: string; message: string } {
+  if (!opts.parsed.signedHeaders.some((h) => h.trim().toLowerCase() === "host")) {
+    return {
+      ok: false,
+      code: "AuthorizationHeaderMalformed",
+      message: "The host header must be signed.",
+    };
+  }
   const now = opts.now ?? Date.now();
   const when = parseAmz(opts.parsed.amzDate);
   if (when === null || !Number.isFinite(when))

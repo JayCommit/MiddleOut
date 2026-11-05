@@ -1,11 +1,21 @@
 import { untrustedResponseHeaders } from "../storage/response-headers.ts";
 export function xmlEscape(value: string): string {
-  return value.replace(/[&<>"]/g, (ch) => {
+  return value.replace(/[&<>"']/g, (ch) => {
     if (ch === "&") return "\u0026amp;";
     if (ch === "<") return "\u0026lt;";
     if (ch === ">") return "\u0026gt;";
+    if (ch === "'") return "\u0026#39;";
     return "\u0026quot;";
   });
+}
+
+export function xmlUnescape(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 export function xmlResponse(status: number, body: string, extra?: HeadersInit): Response {
@@ -104,12 +114,15 @@ export function parseTaggingXml(xml: string): { key: string; value: string }[] {
   const tags: { key: string; value: string }[] = [];
   const tagRe = /<Tag>([\s\S]*?)<\/Tag>/g;
   let match = tagRe.exec(xml);
-  while (match) {
+  while (match && tags.length <= 10) {
     const block = match[1] ?? "";
     const keyMatch = /<Key>([\s\S]*?)<\/Key>/.exec(block);
     const valMatch = /<Value>([\s\S]*?)<\/Value>/.exec(block);
     if (keyMatch && valMatch) {
-      tags.push({ key: keyMatch[1].trim(), value: valMatch[1].trim() });
+      tags.push({
+        key: xmlUnescape(keyMatch[1].trim()),
+        value: xmlUnescape(valMatch[1].trim()),
+      });
     }
     match = tagRe.exec(xml);
   }

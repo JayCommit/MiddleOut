@@ -1,4 +1,7 @@
 services:
+  middleout:
+    environment:
+      TRUST_PROXY: "true"
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped

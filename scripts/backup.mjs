@@ -1,4 +1,15 @@
-import { cp, access, mkdir, readdir, readFile, writeFile, rename, lstat } from "node:fs/promises";
+import {
+  cp,
+  access,
+  mkdir,
+  readdir,
+  readFile,
+  writeFile,
+  rename,
+  lstat,
+  chmod,
+  rm,
+} from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { resolve, join, relative, sep, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -55,6 +66,7 @@ try {
       recursive: true,
       filter: (path) => !path.endsWith(sep + ".middleout-lock"),
     });
+    await chmod(backup, 0o700);
     await writeFile(
       join(backup, "backup-manifest.json"),
       JSON.stringify(
@@ -77,12 +89,18 @@ try {
       throw new Error("Backup checksum verification failed.");
     await mkdir(dirname(data), { recursive: true });
     const staging = data + ".restore-" + randomUUID();
-    await cp(backup, staging, {
-      recursive: true,
-      filter: (path) => !path.endsWith(sep + "backup-manifest.json"),
-    });
-    if (await exists(data)) throw new Error("Restore target changed during restore.");
-    await rename(staging, data);
+    try {
+      await cp(backup, staging, {
+        recursive: true,
+        filter: (path) => !path.endsWith(sep + "backup-manifest.json"),
+      });
+      await chmod(staging, 0o700);
+      if (await exists(data)) throw new Error("Restore target changed during restore.");
+      await rename(staging, data);
+    } catch (error) {
+      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
     console.log(
       "Backup verified and restored. Keep the original backup until the restored node has been checked.",
     );

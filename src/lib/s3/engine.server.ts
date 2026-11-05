@@ -44,6 +44,7 @@ import {
   xmlError,
   xmlEscape,
   xmlResponse,
+  xmlUnescape,
 } from "./xml.ts";
 import { checkRateLimit } from "../rate-limiter.ts";
 
@@ -91,20 +92,11 @@ function parseRange(
   return { start, end: Math.min(end, size - 1) };
 }
 
-function unescapeXml(value: string): string {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-}
-
 function deleteKeys(xml: string): string[] {
   const keys: string[] = [];
   const re = /<Key>([\s\S]*?)<\/Key>/g;
-  for (let match = re.exec(xml); match; match = re.exec(xml))
-    keys.push(unescapeXml(match[1] ?? ""));
+  for (let match = re.exec(xml); match && keys.length <= 1000; match = re.exec(xml))
+    keys.push(xmlUnescape(match[1] ?? ""));
   return keys;
 }
 
@@ -112,14 +104,14 @@ function parseCompleteParts(xml: string): { partNumber: number; etag: string }[]
   const parts: { partNumber: number; etag: string }[] = [];
   const re = /<Part>([\s\S]*?)<\/Part>/g;
   let match = re.exec(xml);
-  while (match) {
+  while (match && parts.length <= 10000) {
     const block = match[1] ?? "";
     const numMatch = /<PartNumber>\s*(\d+)\s*<\/PartNumber>/.exec(block);
     const etagMatch = /<ETag>\s*([\s\S]*?)\s*<\/ETag>/.exec(block);
     if (numMatch && etagMatch) {
       parts.push({
         partNumber: parseInt(numMatch[1] ?? "0", 10),
-        etag: unescapeXml(etagMatch[1] ?? "").replace(/^"|"$/g, ""),
+        etag: xmlUnescape(etagMatch[1] ?? "").replace(/^"|"$/g, ""),
       });
     }
     match = re.exec(xml);
@@ -127,17 +119,26 @@ function parseCompleteParts(xml: string): { partNumber: number; etag: string }[]
   return parts;
 }
 
-function metaHeaders(request: Request, bytes: Buffer): Record<string, string> {
+function metaHeaders(request: Request, bytes: Buffer | null): Record<string, string> {
   const extra: Record<string, string> = {};
+  let metaBytes = 0;
   request.headers.forEach((value, key) => {
-    if (key.startsWith("x-amz-meta-") || key.startsWith("x-amz-checksum-")) extra[key] = value;
+    const lower = key.toLowerCase();
+    if (lower.startsWith("x-amz-meta-") && !/[\r\n\0]/.test(value)) {
+      metaBytes += lower.length + value.length;
+      if (metaBytes <= 2048) extra[lower] = value;
+    }
   });
-  const algo = (request.headers.get("x-amz-sdk-checksum-algorithm") ?? "").toUpperCase();
-  if (algo === "CRC32" || request.headers.get("x-amz-checksum-crc32")) {
-    extra["x-amz-checksum-crc32"] = crc32Base64(bytes);
+  if (bytes !== null) {
+    const algo = (request.headers.get("x-amz-sdk-checksum-algorithm") ?? "").toUpperCase();
+    if (algo === "CRC32" || request.headers.get("x-amz-checksum-crc32")) {
+      extra["x-amz-checksum-crc32"] = crc32Base64(bytes);
+    }
   }
   const encoding = request.headers.get("content-encoding");
-  if (encoding && !encoding.includes("aws-chunked")) extra["content-encoding"] = encoding;
+  if (encoding && !encoding.toLowerCase().includes("aws-chunked") && !/[\r\n\0]/.test(encoding)) {
+    extra["content-encoding"] = encoding;
+  }
   return extra;
 }
 
@@ -180,6 +181,11 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     return withCors(xmlError(400, "InvalidRequest", "Could not read the request body."));
   }
 
+  const parsed = parseAuthorization(request);
+  if (parsed && "error" in parsed) {
+    return withCors(xmlError(400, "AuthorizationHeaderMalformed", parsed.error));
+  }
+
   const mo = request.headers.get("authorization") ?? "";
   let ownerId: string | null = null;
   let keyPermission: "full" | "read-only" = "full";
@@ -196,21 +202,15 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     ownerId = auth.ownerId;
     keyPermission = auth.permission;
     keyBucketScope = auth.bucketScope;
-  } else {
-    const parsed = parseAuthorization(request);
-    if (parsed && "error" in parsed) {
-      return withCors(xmlError(400, "AuthorizationHeaderMalformed", parsed.error));
-    }
-    if (parsed) {
-      const key = await secretForAccessKey(parsed.accessKeyId);
-      if (!key)
-        return withCors(xmlError(403, "InvalidAccessKeyId", "The access key ID does not exist."));
-      const verified = verifySigV4({ request, body, secret: key.secret_key, parsed, now });
-      if (!verified.ok) return withCors(xmlError(403, verified.code, verified.message));
-      ownerId = key.owner_id;
-      keyPermission = key.permission;
-      keyBucketScope = key.bucket_scope;
-    }
+  } else if (parsed) {
+    const key = await secretForAccessKey(parsed.accessKeyId);
+    if (!key)
+      return withCors(xmlError(403, "InvalidAccessKeyId", "The access key ID does not exist."));
+    const verified = verifySigV4({ request, body, secret: key.secret_key, parsed, now });
+    if (!verified.ok) return withCors(xmlError(403, verified.code, verified.message));
+    ownerId = key.owner_id;
+    keyPermission = key.permission;
+    keyBucketScope = key.bucket_scope;
   }
 
   const url = new URL(request.url);
@@ -327,8 +327,17 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (method === "PUT") {
       if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
       const res = await setBucketCors(ownerId, bucket, body.toString("utf8"));
-      if (!res.ok)
-        return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
+      if (!res.ok) {
+        const status = res.error === "NoSuchBucket" ? 404 : 400;
+        return withCors(
+          xmlError(
+            status,
+            res.error,
+            status === 404 ? "The bucket does not exist." : "The CORS configuration is invalid.",
+            `/${bucket}`,
+          ),
+        );
+      }
       return withCors(new Response(null, { status: 200 }));
     }
     if (method === "DELETE") {
@@ -444,11 +453,22 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}`));
 
     const text = body.toString("utf8");
+    const keysToDelete = deleteKeys(text);
+    if (keysToDelete.length === 0 || keysToDelete.length > 1000) {
+      return withCors(
+        xmlError(
+          400,
+          "MalformedXML",
+          "Delete request must specify between 1 and 1000 keys.",
+          `/${bucket}`,
+        ),
+      );
+    }
     const isQuiet = /<Quiet>\s*true\s*<\/Quiet>/i.test(text);
     const deleted: string[] = [];
     const errors: { key: string; code: string; message: string }[] = [];
 
-    for (const objectKey of deleteKeys(text)) {
+    for (const objectKey of keysToDelete) {
       const result = await removeObject(ownerId, bucket, objectKey);
       if (result.ok) {
         deleted.push(objectKey);
@@ -563,7 +583,7 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       bucket,
       key,
       contentType,
-      metaHeaders(request, body),
+      metaHeaders(request, null),
     );
     if (!res.ok) {
       return withCors(
