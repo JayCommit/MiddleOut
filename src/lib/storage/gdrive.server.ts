@@ -291,7 +291,13 @@ export async function deleteDriveCredentials(ownerId: string): Promise<boolean> 
 export async function testDriveConnection(
   ownerId: string,
   fetchFn = fetch,
-): Promise<{ ok: boolean; email?: string; totalBytes?: number; usedBytes?: number; error?: string }> {
+): Promise<{
+  ok: boolean;
+  email?: string;
+  totalBytes?: number;
+  usedBytes?: number;
+  error?: string;
+}> {
   try {
     const { token, creds } = await getValidDriveAccessToken(ownerId, fetchFn);
     const res = await fetchFn(
@@ -440,7 +446,14 @@ export async function findDriveFile(
   key: string,
   token: string,
   fetchFn = fetch,
-): Promise<{ id: string; name: string; size?: string; mimeType?: string; modifiedTime?: string; md5Checksum?: string } | null> {
+): Promise<{
+  id: string;
+  name: string;
+  size?: string;
+  mimeType?: string;
+  modifiedTime?: string;
+  md5Checksum?: string;
+} | null> {
   const parts = key.split("/");
   const fileName = parts.pop()!;
   const dirPath = parts.join("/");
@@ -455,7 +468,14 @@ export async function findDriveFile(
   if (!res.ok) return null;
 
   const data = (await res.json()) as {
-    files?: { id: string; name: string; size?: string; mimeType?: string; modifiedTime?: string; md5Checksum?: string }[];
+    files?: {
+      id: string;
+      name: string;
+      size?: string;
+      mimeType?: string;
+      modifiedTime?: string;
+      md5Checksum?: string;
+    }[];
   };
   return data.files?.[0] || null;
 }
@@ -471,7 +491,13 @@ export async function gdriveListObjects(
   fetchFn = fetch,
 ): Promise<{ key: string; size: number; etag: string; updatedAt: string; contentType: string }[]> {
   const { token } = await getValidDriveAccessToken(ownerId, fetchFn);
-  const objects: { key: string; size: number; etag: string; updatedAt: string; contentType: string }[] = [];
+  const objects: {
+    key: string;
+    size: number;
+    etag: string;
+    updatedAt: string;
+    contentType: string;
+  }[] = [];
 
   // Recursive search under parent folders
   async function crawl(currentFolderId: string, currentPrefix: string) {
@@ -480,7 +506,10 @@ export async function gdriveListObjects(
       const q = `'${currentFolderId}' in parents and trashed = false`;
       const url = new URL("https://www.googleapis.com/drive/v3/files");
       url.searchParams.set("q", q);
-      url.searchParams.set("fields", "nextPageToken,files(id,name,size,mimeType,modifiedTime,md5Checksum)");
+      url.searchParams.set(
+        "fields",
+        "nextPageToken,files(id,name,size,mimeType,modifiedTime,md5Checksum)",
+      );
       url.searchParams.set("pageSize", "1000");
       if (pageToken) url.searchParams.set("pageToken", pageToken);
 
@@ -512,7 +541,9 @@ export async function gdriveListObjects(
               key: itemKey,
               size: Number(file.size || 0),
               etag: file.md5Checksum || createHash("md5").update(file.id).digest("hex"),
-              updatedAt: file.modifiedTime ? new Date(file.modifiedTime).toISOString() : new Date().toISOString(),
+              updatedAt: file.modifiedTime
+                ? new Date(file.modifiedTime).toISOString()
+                : new Date().toISOString(),
               contentType: file.mimeType || "application/octet-stream",
             });
           }
@@ -522,7 +553,8 @@ export async function gdriveListObjects(
   }
 
   await crawl(rootFolderId, "");
-  objects.sort((a, b) => a.key.localeCompare(b.key));
+  // Match the key comparison used by listing cursors, including Unicode names.
+  objects.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   return objects;
 }
 
@@ -569,7 +601,9 @@ export async function gdriveGetObject(
     contentType: file.mimeType || "application/octet-stream",
     size: Number(file.size ?? bytes.length),
     etag: file.md5Checksum || createHash("md5").update(file.id).digest("hex"),
-    updatedAt: file.modifiedTime ? new Date(file.modifiedTime).toISOString() : new Date().toISOString(),
+    updatedAt: file.modifiedTime
+      ? new Date(file.modifiedTime).toISOString()
+      : new Date().toISOString(),
   };
 }
 
@@ -617,10 +651,9 @@ export async function gdrivePutObject(
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
         JSON.stringify(metadata) +
         delimiter +
-        `Content-Type: ${contentType}\r\n` +
-        "Content-Transfer-Encoding: base64\r\n\r\n",
+        `Content-Type: ${contentType}\r\n\r\n`,
     ),
-    Buffer.from(bytes.toString("base64")),
+    bytes,
     Buffer.from(closeDelimiter),
   ]);
 

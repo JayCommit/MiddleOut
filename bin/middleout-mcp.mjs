@@ -4,11 +4,7 @@
  * MiddleOut Native Model Context Protocol (MCP) Server CLI.
  *
  * Can be run directly via:
- *   npx @middleout/mcp-server
- * or
- *   middleout-mcp
- * or
- *   node bin/middleout-mcp.mjs
+ *   node --experimental-strip-types /absolute/path/to/MiddleOut/bin/middleout-mcp.mjs
  *
  * Environment variables:
  *   MIDDLEOUT_ENDPOINT: URL of the MiddleOut server (defaults to http://localhost:8080)

@@ -39,7 +39,11 @@ function CopySnippet({ label, text }: { label: string; text: string }) {
           onClick={copy}
           className="flex items-center gap-1 text-fg hover:text-accent transition-colors"
         >
-          {copied ? <Check className="h-3.5 w-3.5 text-accent" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? (
+            <Check className="h-3.5 w-3.5 text-accent" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
           <span>{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
@@ -54,7 +58,9 @@ function AgentsPage() {
   const [overviewData, setOverviewData] = useState<Overview | null>(null);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [permissions, setPermissions] = useState<"read" | "write" | "read-write" | "admin">("read-write");
+  const [permissions, setPermissions] = useState<"read" | "write" | "read-write" | "admin">(
+    "read-write",
+  );
   const [bucketScope, setBucketScope] = useState("*");
   const [ttlDays, setTtlDays] = useState(30);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
@@ -83,8 +89,8 @@ function AgentsPage() {
     {
       mcpServers: {
         middleout: {
-          command: "npx",
-          args: ["-y", "@middleout/mcp-server"],
+          command: "node",
+          args: ["--experimental-strip-types", "/absolute/path/to/MiddleOut/bin/middleout-mcp.mjs"],
           env: {
             MIDDLEOUT_ENDPOINT: endpoint,
             MIDDLEOUT_AGENT_KEY: createdToken || "mo_agent_live_YOUR_TOKEN_HERE",
@@ -100,7 +106,8 @@ function AgentsPage() {
     {
       mcpServers: {
         middleout: {
-          command: "middleout-mcp",
+          command: "node",
+          args: ["--experimental-strip-types", "/absolute/path/to/MiddleOut/bin/middleout-mcp.mjs"],
           env: {
             MIDDLEOUT_ENDPOINT: endpoint,
             MIDDLEOUT_AGENT_KEY: createdToken || "mo_agent_live_YOUR_TOKEN_HERE",
@@ -141,11 +148,17 @@ function AgentsPage() {
             <h2 className="text-sm font-semibold">Connect AI Agents & Tools (MCP)</h2>
           </div>
           <p className="text-xs text-muted">
-            Configure Claude Desktop, Antigravity, Cursor, or AutoGen using the native MiddleOut MCP server or REST API.
+            Configure Claude Desktop, Antigravity, Cursor, or AutoGen using the native MiddleOut MCP
+            server or REST API. Replace the script path in the local configuration with your
+            checkout path. Remote MCP clients can use Streamable HTTP at /api/agent/v1/mcp with
+            their agent bearer token.
           </p>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <CopySnippet label="Claude Desktop (claude_desktop_config.json)" text={claudeDesktopConfig} />
+            <CopySnippet
+              label="Claude Desktop (claude_desktop_config.json)"
+              text={claudeDesktopConfig}
+            />
             <CopySnippet label="Antigravity / Cursor MCP Config" text={antigravityConfig} />
           </div>
 
@@ -155,13 +168,18 @@ function AgentsPage() {
         {/* Active Agent Tokens */}
         <div className="mt-8">
           <h2 className="text-base font-semibold">Agent Access Tokens</h2>
-          <p className="text-xs text-muted">Tokens authenticate bots with Bearer mo_agent_... without AWS SigV4 signing.</p>
+          <p className="text-xs text-muted">
+            Tokens authenticate bots with Bearer mo_agent_... without AWS SigV4 signing.
+          </p>
 
           {!tokens ? (
             <p className="mt-4 text-sm text-muted">Loading tokens…</p>
           ) : tokens.length === 0 ? (
             <div className="mt-4">
-              <EmptyState title="No agent tokens" body="Generate an agent token to connect an MCP client or autonomous bot." />
+              <EmptyState
+                title="No agent tokens"
+                body="Generate an agent token to connect an MCP client or autonomous bot."
+              />
             </div>
           ) : (
             <ul className="mt-4 overflow-hidden rounded-lg border border-border">
@@ -184,13 +202,17 @@ function AgentsPage() {
                       {token.expiresAt && (
                         <>
                           <span>·</span>
-                          <span className="text-amber-400">Expires {formatWhen(token.expiresAt)}</span>
+                          <span className="text-amber-400">
+                            Expires {formatWhen(token.expiresAt)}
+                          </span>
                         </>
                       )}
                       {token.lastUsedAt && (
                         <>
                           <span>·</span>
-                          <span className="text-accent">Last used {formatWhen(token.lastUsedAt)}</span>
+                          <span className="text-accent">
+                            Last used {formatWhen(token.lastUsedAt)}
+                          </span>
                         </>
                       )}
                     </div>
@@ -221,10 +243,14 @@ function AgentsPage() {
             <Clock className="h-4 w-4 text-amber-400" />
             <h2 className="text-base font-semibold">Active Ephemeral Scratch Buckets</h2>
           </div>
-          <p className="text-xs text-muted">Temporary agent buckets that automatically purge themselves when their TTL expires.</p>
+          <p className="text-xs text-muted">
+            Temporary agent buckets that automatically purge themselves when their TTL expires.
+          </p>
 
           {scratchBuckets.length === 0 ? (
-            <p className="mt-3 text-xs text-muted">No active ephemeral scratch buckets right now.</p>
+            <p className="mt-3 text-xs text-muted">
+              No active ephemeral scratch buckets right now.
+            </p>
           ) : (
             <div className="mt-3 overflow-x-auto rounded-lg border border-border">
               <table className="w-full text-left text-sm">

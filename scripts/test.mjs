@@ -13,6 +13,8 @@ const result = spawnSync(
     "src/lib/storage/regressions.test.ts",
     "src/lib/storage/gdrive.test.ts",
     "src/lib/storage/agent-mcp.test.ts",
+    "src/lib/storage/review-regressions.test.ts",
+    "src/lib/storage/mcp-http.test.ts",
     "scripts/bootstrap.test.mjs",
     "scripts/readiness.test.mjs",
     "scripts/runtime-config.test.mjs",

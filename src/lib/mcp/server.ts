@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { encodeKeyPath } from "../storage/pure.ts";
 import * as readline from "node:readline";
 
 export interface McpTool {
@@ -13,7 +15,8 @@ export interface McpTool {
 export const MCP_TOOLS: McpTool[] = [
   {
     name: "storage_list_buckets",
-    description: "List all accessible buckets in MiddleOut, including Google Drive mounts, ephemeral scratch buckets, object counts, and account quota.",
+    description:
+      "List all accessible buckets in MiddleOut, including Google Drive mounts, ephemeral scratch buckets, object counts, and account quota.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -21,19 +24,25 @@ export const MCP_TOOLS: McpTool[] = [
   },
   {
     name: "storage_list_files",
-    description: "Browse files and directories within a specified MiddleOut bucket under an optional prefix.",
+    description:
+      "Browse files and directories within a specified MiddleOut bucket under an optional prefix.",
     inputSchema: {
       type: "object",
       properties: {
         bucket: { type: "string", description: "The bucket name to browse" },
-        prefix: { type: "string", description: "Optional directory prefix (e.g. 'logs/' or 'artifacts/')" },
+        prefix: {
+          type: "string",
+          description: "Optional directory prefix (e.g. 'logs/' or 'artifacts/')",
+        },
+        cursor: { type: "string", description: "nextStart from the previous listing page" },
       },
       required: ["bucket"],
     },
   },
   {
     name: "storage_read_file",
-    description: "Read the contents of a file from MiddleOut storage. Auto-detects text vs binary data.",
+    description:
+      "Read the contents of a file from MiddleOut storage. Auto-detects text vs binary data.",
     inputSchema: {
       type: "object",
       properties: {
@@ -52,34 +61,51 @@ export const MCP_TOOLS: McpTool[] = [
         bucket: { type: "string", description: "Target bucket name" },
         key: { type: "string", description: "Destination file key / path" },
         content: { type: "string", description: "Text or Base64 content to write" },
-        content_type: { type: "string", description: "Optional MIME type (defaults to auto-detection)" },
-        is_base64: { type: "boolean", description: "Set to true if content is base64-encoded binary" },
+        content_type: {
+          type: "string",
+          description: "Optional MIME type (defaults to auto-detection)",
+        },
+        is_base64: {
+          type: "boolean",
+          description: "Set to true if content is base64-encoded binary",
+        },
       },
       required: ["bucket", "key", "content"],
     },
   },
   {
     name: "storage_upload_artifact",
-    description: "Quick scratchpad artifact upload for agent dumps, test runs, or shared files. Automatically saves to a scratch bucket and returns an instant shareable URL.",
+    description:
+      "Quick scratchpad artifact upload for agent dumps, test runs, or shared files. Automatically saves to a scratch bucket and returns an instant shareable URL.",
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Filename (e.g. 'benchmark-summary.json' or 'agent-log.md')" },
+        name: {
+          type: "string",
+          description: "Filename (e.g. 'benchmark-summary.json' or 'agent-log.md')",
+        },
         content: { type: "string", description: "File content" },
-        ttl_hours: { type: "number", description: "TTL in hours before auto-purge (defaults to 24)" },
+        ttl_hours: {
+          type: "number",
+          description: "TTL in hours before auto-purge (defaults to 24)",
+        },
       },
       required: ["name", "content"],
     },
   },
   {
     name: "storage_get_share_link",
-    description: "Generate a public or presigned share link for an object with a custom expiration duration.",
+    description:
+      "Generate a public or presigned share link for an object with a custom expiration duration.",
     inputSchema: {
       type: "object",
       properties: {
         bucket: { type: "string", description: "Bucket name" },
         key: { type: "string", description: "Object key" },
-        expires_in: { type: "number", description: "Link expiration time in seconds (e.g. 3600 for 1 hour)" },
+        expires_in: {
+          type: "number",
+          description: "Link expiration time in seconds (e.g. 3600 for 1 hour)",
+        },
       },
       required: ["bucket", "key"],
     },
@@ -125,7 +151,9 @@ export class MiddleOutMcpServer {
       case "storage_list_files": {
         const bucket = String(args.bucket || "");
         const prefix = String(args.prefix || "");
-        const res = await this.request(`/api/agent/v1/search?bucket=${encodeURIComponent(bucket)}&q=${encodeURIComponent(prefix)}`);
+        const res = await this.request(
+          `/api/agent/v1/files?bucket=${encodeURIComponent(bucket)}&prefix=${encodeURIComponent(prefix)}&cursor=${encodeURIComponent(String(args.cursor || ""))}`,
+        );
         if (!res.ok) throw new Error(`Failed to list files: ${res.status} ${await res.text()}`);
         return res.json();
       }
@@ -133,7 +161,9 @@ export class MiddleOutMcpServer {
       case "storage_read_file": {
         const bucket = String(args.bucket || "");
         const key = String(args.key || "");
-        const res = await this.request(`/api/agent/v1/objects/${encodeURIComponent(bucket)}/${encodeURI(key)}?format=json`);
+        const res = await this.request(
+          `/api/agent/v1/objects/${encodeURIComponent(bucket)}/${encodeKeyPath(key)}?format=json`,
+        );
         if (!res.ok) throw new Error(`Failed to read file: ${res.status} ${await res.text()}`);
         return res.json();
       }
@@ -159,18 +189,26 @@ export class MiddleOutMcpServer {
         const content = String(args.content || "");
         const ttlHours = typeof args.ttl_hours === "number" ? args.ttl_hours : 24;
 
-        // Use or create default scratch bucket
+        if (!Number.isFinite(ttlHours) || ttlHours <= 0 || ttlHours > 720) {
+          throw new Error("ttl_hours must be greater than zero and at most 720 (30 days).");
+        }
+        // A fresh bucket gives every artifact its own requested lifetime.
         const scratchRes = await this.request("/api/agent/v1/scratch-buckets", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: "agent-artifacts", ttl: `${ttlHours}h` }),
+          body: JSON.stringify({
+            name: `agent-artifacts-${randomUUID()}`,
+            ttl: Math.ceil(ttlHours * 3600),
+          }),
         });
 
-        let targetBucket = "agent-artifacts";
-        if (scratchRes.ok) {
-          const scratchData = (await scratchRes.json()) as { bucket?: { name?: string } };
-          if (scratchData.bucket?.name) targetBucket = scratchData.bucket.name;
-        }
+        if (!scratchRes.ok)
+          throw new Error(
+            `Failed to create scratch bucket: ${scratchRes.status} ${await scratchRes.text()}`,
+          );
+        const scratchData = (await scratchRes.json()) as { bucket?: { name?: string } };
+        const targetBucket = scratchData.bucket?.name;
+        if (!targetBucket) throw new Error("Scratch bucket response is missing its name.");
 
         const uploadRes = await this.request("/api/agent/v1/upload", {
           method: "POST",
@@ -183,7 +221,10 @@ export class MiddleOutMcpServer {
           }),
         });
 
-        if (!uploadRes.ok) throw new Error(`Failed to upload artifact: ${uploadRes.status} ${await uploadRes.text()}`);
+        if (!uploadRes.ok)
+          throw new Error(
+            `Failed to upload artifact: ${uploadRes.status} ${await uploadRes.text()}`,
+          );
         return uploadRes.json();
       }
 
@@ -198,7 +239,8 @@ export class MiddleOutMcpServer {
           body: JSON.stringify({ bucket, key, expiresIn }),
         });
 
-        if (!res.ok) throw new Error(`Failed to generate share link: ${res.status} ${await res.text()}`);
+        if (!res.ok)
+          throw new Error(`Failed to generate share link: ${res.status} ${await res.text()}`);
         return res.json();
       }
 
@@ -210,7 +252,11 @@ export class MiddleOutMcpServer {
   /**
    * Handle standard JSON-RPC 2.0 message according to MCP specification.
    */
-  async handleMessage(message: { id?: string | number; method?: string; params?: Record<string, unknown> }): Promise<Record<string, unknown> | null> {
+  async handleMessage(message: {
+    id?: string | number;
+    method?: string;
+    params?: Record<string, unknown>;
+  }): Promise<Record<string, unknown> | null> {
     const { id, method, params } = message;
 
     if (method === "initialize") {
@@ -307,7 +353,11 @@ export class MiddleOutMcpServer {
       const trimmed = line.trim();
       if (!trimmed) return;
       try {
-        const message = JSON.parse(trimmed) as { id?: string | number; method?: string; params?: Record<string, unknown> };
+        const message = JSON.parse(trimmed) as {
+          id?: string | number;
+          method?: string;
+          params?: Record<string, unknown>;
+        };
         const response = await this.handleMessage(message);
         if (response) {
           process.stdout.write(JSON.stringify(response) + "\n");
@@ -317,7 +367,10 @@ export class MiddleOutMcpServer {
           JSON.stringify({
             jsonrpc: "2.0",
             id: null,
-            error: { code: -32700, message: "Parse error: " + (err instanceof Error ? err.message : String(err)) },
+            error: {
+              code: -32700,
+              message: "Parse error: " + (err instanceof Error ? err.message : String(err)),
+            },
           }) + "\n",
         );
       }

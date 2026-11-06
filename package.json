@@ -19,6 +19,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "start": "node --env-file-if-exists=.env scripts/start.mjs",
+    "test:agents": "node --experimental-strip-types scripts/agent-http-smoke.mjs",
     "test:selfhost": "node scripts/selfhost-smoke.mjs",
     "test:postgres": "node scripts/test-postgres.mjs",
     "test:clients": "node scripts/test-interop.mjs",

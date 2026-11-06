@@ -17,6 +17,7 @@ import { Route as DocsRouteImport } from './routes/docs'
 import { Route as KeysRouteImport } from './routes/keys'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as DotwellKnownLlmsDottxtRouteImport } from './routes/[.]well-known/llms[.]txt'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiMetricsRouteImport } from './routes/api/metrics'
 import { Route as BucketsIndexRouteImport } from './routes/buckets/index'
@@ -27,14 +28,15 @@ import { Route as ApiS3IndexRouteImport } from './routes/api/s3/index'
 import { Route as ApiS3SplatRouteImport } from './routes/api/s3/$'
 import { Route as ApiShareTokenRouteImport } from './routes/api/share/$token'
 import { Route as ApiAgentV1BucketsRouteImport } from './routes/api/agent/v1/buckets'
+import { Route as ApiAgentV1FilesRouteImport } from './routes/api/agent/v1/files'
 import { Route as ApiAgentV1McpRouteImport } from './routes/api/agent/v1/mcp'
+import { Route as ApiAgentV1OpenapiDotjsonRouteImport } from './routes/api/agent/v1/openapi[.]json'
 import { Route as ApiAgentV1ScratchBucketsRouteImport } from './routes/api/agent/v1/scratch-buckets'
 import { Route as ApiAgentV1SearchRouteImport } from './routes/api/agent/v1/search'
 import { Route as ApiAgentV1ShareRouteImport } from './routes/api/agent/v1/share'
 import { Route as ApiAgentV1UploadRouteImport } from './routes/api/agent/v1/upload'
 import { Route as ApiPublicBucketSplatRouteImport } from './routes/api/public/$bucket/$'
 import { Route as ApiAgentV1ObjectsSplatRouteImport } from './routes/api/agent/v1/objects/$'
-import { Route as ApiAgentV1OpenapiJsonRouteImport } from './routes/api/agent/v1/openapi.json'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -74,6 +76,11 @@ const LoginRoute = LoginRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DotwellKnownLlmsDottxtRoute = DotwellKnownLlmsDottxtRouteImport.update({
+  id: '/.well-known/llms.txt',
+  path: '/.well-known/llms.txt',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -126,11 +133,22 @@ const ApiAgentV1BucketsRoute = ApiAgentV1BucketsRouteImport.update({
   path: '/api/agent/v1/buckets',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAgentV1FilesRoute = ApiAgentV1FilesRouteImport.update({
+  id: '/api/agent/v1/files',
+  path: '/api/agent/v1/files',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAgentV1McpRoute = ApiAgentV1McpRouteImport.update({
   id: '/api/agent/v1/mcp',
   path: '/api/agent/v1/mcp',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAgentV1OpenapiDotjsonRoute =
+  ApiAgentV1OpenapiDotjsonRouteImport.update({
+    id: '/api/agent/v1/openapi.json',
+    path: '/api/agent/v1/openapi.json',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiAgentV1ScratchBucketsRoute =
   ApiAgentV1ScratchBucketsRouteImport.update({
     id: '/api/agent/v1/scratch-buckets',
@@ -162,11 +180,6 @@ const ApiAgentV1ObjectsSplatRoute = ApiAgentV1ObjectsSplatRouteImport.update({
   path: '/api/agent/v1/objects/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAgentV1OpenapiJsonRoute = ApiAgentV1OpenapiJsonRouteImport.update({
-  id: '/api/agent/v1/openapi/json',
-  path: '/api/agent/v1/openapi/json',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -177,6 +190,7 @@ export interface FileRoutesByFullPath {
   '/keys': typeof KeysRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
+  '/.well-known/llms.txt': typeof DotwellKnownLlmsDottxtRoute
   '/api/health': typeof ApiHealthRoute
   '/api/metrics': typeof ApiMetricsRoute
   '/buckets/$name': typeof BucketsNameRoute
@@ -187,14 +201,15 @@ export interface FileRoutesByFullPath {
   '/api/share/$token': typeof ApiShareTokenRoute
   '/api/s3/': typeof ApiS3IndexRoute
   '/api/agent/v1/buckets': typeof ApiAgentV1BucketsRoute
+  '/api/agent/v1/files': typeof ApiAgentV1FilesRoute
   '/api/agent/v1/mcp': typeof ApiAgentV1McpRoute
+  '/api/agent/v1/openapi.json': typeof ApiAgentV1OpenapiDotjsonRoute
   '/api/agent/v1/scratch-buckets': typeof ApiAgentV1ScratchBucketsRoute
   '/api/agent/v1/search': typeof ApiAgentV1SearchRoute
   '/api/agent/v1/share': typeof ApiAgentV1ShareRoute
   '/api/agent/v1/upload': typeof ApiAgentV1UploadRoute
   '/api/public/$bucket/$': typeof ApiPublicBucketSplatRoute
   '/api/agent/v1/objects/$': typeof ApiAgentV1ObjectsSplatRoute
-  '/api/agent/v1/openapi/json': typeof ApiAgentV1OpenapiJsonRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -204,6 +219,7 @@ export interface FileRoutesByTo {
   '/keys': typeof KeysRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
+  '/.well-known/llms.txt': typeof DotwellKnownLlmsDottxtRoute
   '/api/health': typeof ApiHealthRoute
   '/api/metrics': typeof ApiMetricsRoute
   '/buckets/$name': typeof BucketsNameRoute
@@ -214,14 +230,15 @@ export interface FileRoutesByTo {
   '/api/share/$token': typeof ApiShareTokenRoute
   '/api/s3': typeof ApiS3IndexRoute
   '/api/agent/v1/buckets': typeof ApiAgentV1BucketsRoute
+  '/api/agent/v1/files': typeof ApiAgentV1FilesRoute
   '/api/agent/v1/mcp': typeof ApiAgentV1McpRoute
+  '/api/agent/v1/openapi.json': typeof ApiAgentV1OpenapiDotjsonRoute
   '/api/agent/v1/scratch-buckets': typeof ApiAgentV1ScratchBucketsRoute
   '/api/agent/v1/search': typeof ApiAgentV1SearchRoute
   '/api/agent/v1/share': typeof ApiAgentV1ShareRoute
   '/api/agent/v1/upload': typeof ApiAgentV1UploadRoute
   '/api/public/$bucket/$': typeof ApiPublicBucketSplatRoute
   '/api/agent/v1/objects/$': typeof ApiAgentV1ObjectsSplatRoute
-  '/api/agent/v1/openapi/json': typeof ApiAgentV1OpenapiJsonRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -233,6 +250,7 @@ export interface FileRoutesById {
   '/keys': typeof KeysRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
+  '/.well-known/llms.txt': typeof DotwellKnownLlmsDottxtRoute
   '/api/health': typeof ApiHealthRoute
   '/api/metrics': typeof ApiMetricsRoute
   '/buckets/$name': typeof BucketsNameRoute
@@ -243,14 +261,15 @@ export interface FileRoutesById {
   '/api/share/$token': typeof ApiShareTokenRoute
   '/api/s3/': typeof ApiS3IndexRoute
   '/api/agent/v1/buckets': typeof ApiAgentV1BucketsRoute
+  '/api/agent/v1/files': typeof ApiAgentV1FilesRoute
   '/api/agent/v1/mcp': typeof ApiAgentV1McpRoute
+  '/api/agent/v1/openapi.json': typeof ApiAgentV1OpenapiDotjsonRoute
   '/api/agent/v1/scratch-buckets': typeof ApiAgentV1ScratchBucketsRoute
   '/api/agent/v1/search': typeof ApiAgentV1SearchRoute
   '/api/agent/v1/share': typeof ApiAgentV1ShareRoute
   '/api/agent/v1/upload': typeof ApiAgentV1UploadRoute
   '/api/public/$bucket/$': typeof ApiPublicBucketSplatRoute
   '/api/agent/v1/objects/$': typeof ApiAgentV1ObjectsSplatRoute
-  '/api/agent/v1/openapi/json': typeof ApiAgentV1OpenapiJsonRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -263,6 +282,7 @@ export interface FileRouteTypes {
     | '/keys'
     | '/login'
     | '/settings'
+    | '/.well-known/llms.txt'
     | '/api/health'
     | '/api/metrics'
     | '/buckets/$name'
@@ -273,14 +293,15 @@ export interface FileRouteTypes {
     | '/api/share/$token'
     | '/api/s3/'
     | '/api/agent/v1/buckets'
+    | '/api/agent/v1/files'
     | '/api/agent/v1/mcp'
+    | '/api/agent/v1/openapi.json'
     | '/api/agent/v1/scratch-buckets'
     | '/api/agent/v1/search'
     | '/api/agent/v1/share'
     | '/api/agent/v1/upload'
     | '/api/public/$bucket/$'
     | '/api/agent/v1/objects/$'
-    | '/api/agent/v1/openapi/json'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -290,6 +311,7 @@ export interface FileRouteTypes {
     | '/keys'
     | '/login'
     | '/settings'
+    | '/.well-known/llms.txt'
     | '/api/health'
     | '/api/metrics'
     | '/buckets/$name'
@@ -300,14 +322,15 @@ export interface FileRouteTypes {
     | '/api/share/$token'
     | '/api/s3'
     | '/api/agent/v1/buckets'
+    | '/api/agent/v1/files'
     | '/api/agent/v1/mcp'
+    | '/api/agent/v1/openapi.json'
     | '/api/agent/v1/scratch-buckets'
     | '/api/agent/v1/search'
     | '/api/agent/v1/share'
     | '/api/agent/v1/upload'
     | '/api/public/$bucket/$'
     | '/api/agent/v1/objects/$'
-    | '/api/agent/v1/openapi/json'
   id:
     | '__root__'
     | '/'
@@ -318,6 +341,7 @@ export interface FileRouteTypes {
     | '/keys'
     | '/login'
     | '/settings'
+    | '/.well-known/llms.txt'
     | '/api/health'
     | '/api/metrics'
     | '/buckets/$name'
@@ -328,14 +352,15 @@ export interface FileRouteTypes {
     | '/api/share/$token'
     | '/api/s3/'
     | '/api/agent/v1/buckets'
+    | '/api/agent/v1/files'
     | '/api/agent/v1/mcp'
+    | '/api/agent/v1/openapi.json'
     | '/api/agent/v1/scratch-buckets'
     | '/api/agent/v1/search'
     | '/api/agent/v1/share'
     | '/api/agent/v1/upload'
     | '/api/public/$bucket/$'
     | '/api/agent/v1/objects/$'
-    | '/api/agent/v1/openapi/json'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -347,6 +372,7 @@ export interface RootRouteChildren {
   KeysRoute: typeof KeysRoute
   LoginRoute: typeof LoginRoute
   SettingsRoute: typeof SettingsRoute
+  DotwellKnownLlmsDottxtRoute: typeof DotwellKnownLlmsDottxtRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMetricsRoute: typeof ApiMetricsRoute
   PNameRoute: typeof PNameRoute
@@ -355,14 +381,15 @@ export interface RootRouteChildren {
   ApiShareTokenRoute: typeof ApiShareTokenRoute
   ApiS3IndexRoute: typeof ApiS3IndexRoute
   ApiAgentV1BucketsRoute: typeof ApiAgentV1BucketsRoute
+  ApiAgentV1FilesRoute: typeof ApiAgentV1FilesRoute
   ApiAgentV1McpRoute: typeof ApiAgentV1McpRoute
+  ApiAgentV1OpenapiDotjsonRoute: typeof ApiAgentV1OpenapiDotjsonRoute
   ApiAgentV1ScratchBucketsRoute: typeof ApiAgentV1ScratchBucketsRoute
   ApiAgentV1SearchRoute: typeof ApiAgentV1SearchRoute
   ApiAgentV1ShareRoute: typeof ApiAgentV1ShareRoute
   ApiAgentV1UploadRoute: typeof ApiAgentV1UploadRoute
   ApiPublicBucketSplatRoute: typeof ApiPublicBucketSplatRoute
   ApiAgentV1ObjectsSplatRoute: typeof ApiAgentV1ObjectsSplatRoute
-  ApiAgentV1OpenapiJsonRoute: typeof ApiAgentV1OpenapiJsonRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -421,6 +448,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/.well-known/llms.txt': {
+      id: '/.well-known/llms.txt'
+      path: '/.well-known/llms.txt'
+      fullPath: '/.well-known/llms.txt'
+      preLoaderRoute: typeof DotwellKnownLlmsDottxtRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/health': {
@@ -493,11 +527,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAgentV1BucketsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/agent/v1/files': {
+      id: '/api/agent/v1/files'
+      path: '/api/agent/v1/files'
+      fullPath: '/api/agent/v1/files'
+      preLoaderRoute: typeof ApiAgentV1FilesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/agent/v1/mcp': {
       id: '/api/agent/v1/mcp'
       path: '/api/agent/v1/mcp'
       fullPath: '/api/agent/v1/mcp'
       preLoaderRoute: typeof ApiAgentV1McpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/v1/openapi.json': {
+      id: '/api/agent/v1/openapi.json'
+      path: '/api/agent/v1/openapi.json'
+      fullPath: '/api/agent/v1/openapi.json'
+      preLoaderRoute: typeof ApiAgentV1OpenapiDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/agent/v1/scratch-buckets': {
@@ -542,13 +590,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAgentV1ObjectsSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/agent/v1/openapi/json': {
-      id: '/api/agent/v1/openapi/json'
-      path: '/api/agent/v1/openapi/json'
-      fullPath: '/api/agent/v1/openapi/json'
-      preLoaderRoute: typeof ApiAgentV1OpenapiJsonRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -575,6 +616,7 @@ const rootRouteChildren: RootRouteChildren = {
   KeysRoute: KeysRoute,
   LoginRoute: LoginRoute,
   SettingsRoute: SettingsRoute,
+  DotwellKnownLlmsDottxtRoute: DotwellKnownLlmsDottxtRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiMetricsRoute: ApiMetricsRoute,
   PNameRoute: PNameRoute,
@@ -583,14 +625,15 @@ const rootRouteChildren: RootRouteChildren = {
   ApiShareTokenRoute: ApiShareTokenRoute,
   ApiS3IndexRoute: ApiS3IndexRoute,
   ApiAgentV1BucketsRoute: ApiAgentV1BucketsRoute,
+  ApiAgentV1FilesRoute: ApiAgentV1FilesRoute,
   ApiAgentV1McpRoute: ApiAgentV1McpRoute,
+  ApiAgentV1OpenapiDotjsonRoute: ApiAgentV1OpenapiDotjsonRoute,
   ApiAgentV1ScratchBucketsRoute: ApiAgentV1ScratchBucketsRoute,
   ApiAgentV1SearchRoute: ApiAgentV1SearchRoute,
   ApiAgentV1ShareRoute: ApiAgentV1ShareRoute,
   ApiAgentV1UploadRoute: ApiAgentV1UploadRoute,
   ApiPublicBucketSplatRoute: ApiPublicBucketSplatRoute,
   ApiAgentV1ObjectsSplatRoute: ApiAgentV1ObjectsSplatRoute,
-  ApiAgentV1OpenapiJsonRoute: ApiAgentV1OpenapiJsonRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
