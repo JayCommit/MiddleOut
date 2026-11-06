@@ -151,10 +151,111 @@ try {
     await untrustedPage.close();
   }
   assert.equal(scriptRequests, 0, "Uploaded documents must not execute with the operator session.");
+  // Lifecycle is a real console -> authenticated server function -> S3/data flow.
+  assert.equal((await client.put("/api/s3/http-lifecycle", { headers: s3Headers })).status(), 200);
+  for (const key of ["logs/expired.txt", "keep.txt"])
+    assert.equal(
+      (
+        await client.put(`/api/s3/http-lifecycle/${key}`, {
+          headers: s3Headers,
+          data: "lifecycle fixture",
+        })
+      ).status(),
+      200,
+    );
+  await page.goto(`${origin}/buckets/http-lifecycle`);
+  await page.getByRole("button", { name: "Lifecycle", exact: true }).click();
+  await page.getByRole("heading", { name: "Lifecycle rules", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Create rule", exact: true }).click();
+  const createRule = page.getByRole("dialog", { name: "Create lifecycle rule", exact: true });
+  await createRule.getByLabel("Rule name", { exact: true }).fill("Expire temporary logs");
+  await createRule.getByLabel("File prefix (leave empty for all files)").fill("logs/");
+  await createRule.getByLabel("Expire files", { exact: true }).selectOption("date");
+  await createRule
+    .getByLabel("Expiration date (UTC)")
+    .fill(new Date(Date.now() - 86400000).toISOString().slice(0, 10));
+  await createRule.getByRole("button", { name: "Review rule" }).click();
+  let reviewRule = page.getByRole("dialog", { name: "Review lifecycle changes", exact: true });
+  assert.equal(
+    await reviewRule.getByRole("button", { name: "Save lifecycle rules" }).isDisabled(),
+    true,
+  );
+  await reviewRule.getByRole("button", { name: "Preview affected files" }).click();
+  await reviewRule.getByText("1 files", { exact: true }).waitFor();
+  assert.equal(
+    (await client.get("/api/s3/http-lifecycle/logs/expired.txt", { headers: s3Headers })).status(),
+    200,
+    "Preview is read-only",
+  );
+  await reviewRule.getByRole("checkbox").check();
+  await reviewRule.getByRole("button", { name: "Save lifecycle rules" }).click();
+  await page.getByRole("heading", { name: "Expire temporary logs", exact: true }).waitFor();
+  const lifecycleConfig = await client.get("/api/s3/http-lifecycle?lifecycle", {
+    headers: s3Headers,
+  });
+  assert.match(await lifecycleConfig.text(), /<Prefix>logs\/<\/Prefix>/);
+  const beforeCleanup = await client.get("/api/s3/http-lifecycle/logs/expired.txt", {
+    headers: s3Headers,
+  });
+  assert.equal(beforeCleanup.status(), 200, "Saving rules does not immediately delete bytes");
+  assert.match(beforeCleanup.headers()["x-amz-expiration"], /expiry-date=/);
+  if (process.env.LIFECYCLE_SCREENSHOT)
+    await page.screenshot({ path: process.env.LIFECYCLE_SCREENSHOT, fullPage: true });
+  await page.getByRole("button", { name: "Run cleanup", exact: true }).click();
+  const cleanup = page.getByRole("dialog", { name: "Review cleanup", exact: true });
+  await cleanup.getByRole("button", { name: "Preview affected files" }).click();
+  await cleanup.getByText("1 files", { exact: true }).waitFor();
+  await cleanup.getByRole("checkbox").check();
+  await cleanup.getByRole("button", { name: "Run cleanup now", exact: true }).click();
+  await page.getByText("Expired 1 files and aborted 0 uploads.", { exact: true }).waitFor();
+  assert.equal(
+    (await client.get("/api/s3/http-lifecycle/logs/expired.txt", { headers: s3Headers })).status(),
+    404,
+  );
+  assert.equal(
+    (await client.get("/api/s3/http-lifecycle/keep.txt", { headers: s3Headers })).status(),
+    200,
+  );
+  await page.getByRole("button", { name: "Disable", exact: true }).click();
+  await page.getByRole("button", { name: "Enable", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const editRule = page.getByRole("dialog", { name: "Edit lifecycle rule", exact: true });
+  await editRule.getByLabel("File prefix (leave empty for all files)").fill("archive/");
+  await editRule.getByRole("button", { name: "Review rule" }).click();
+  reviewRule = page.getByRole("dialog", { name: "Review lifecycle changes", exact: true });
+  await reviewRule.getByRole("button", { name: "Preview affected files" }).click();
+  await reviewRule.getByText("0 files", { exact: true }).waitFor();
+  await reviewRule.getByRole("checkbox").check();
+  await reviewRule.getByRole("button", { name: "Save lifecycle rules" }).click();
+  await page.getByText("Prefix: archive/", { exact: true }).waitFor();
+  await page
+    .getByRole("button", { name: "Delete rule Expire temporary logs", exact: true })
+    .click();
+  await page.getByRole("heading", { name: "No lifecycle rules", exact: true }).waitFor();
+  assert.equal(
+    (await client.get("/api/s3/http-lifecycle?lifecycle", { headers: s3Headers })).status(),
+    404,
+  );
+  const retainedConfig =
+    "<LifecycleConfiguration><Rule><ID>persisted-retention</ID><Filter/><Status>Disabled</Status><Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>";
+  assert.equal(
+    (
+      await client.put("/api/s3/http-lifecycle?lifecycle", {
+        headers: s3Headers,
+        data: retainedConfig,
+      })
+    ).status(),
+    200,
+  );
   // A stored session must still verify after a full server restart, and new
   // account creation must be rejected after registration is disabled.
   await stop();
   await start(false);
+  assert.match(
+    await (await client.get("/api/s3/http-lifecycle?lifecycle", { headers: s3Headers })).text(),
+    /persisted-retention/,
+  );
+
   assert.equal(
     await (await client.get("/api/s3/http-smoke/file.txt", { headers: s3Headers })).text(),
     "persisted HTTP object",
@@ -204,7 +305,7 @@ try {
   assert.equal(newLogin.status(), 200, await newLogin.text());
   assert.deepEqual(failures, []);
   console.log(
-    "PASS: standalone server health, local auth, origin rejection, authenticated console, S3 HTTP writes/reads, private access and blocked active documents, restart/session/object/key persistence, registration lockout, sign out and sign in.",
+    "PASS: standalone server health, local auth, origin rejection, authenticated console, S3 HTTP writes/reads, lifecycle console previews/CRUD/execution and restart persistence, private access and blocked active documents, restart/session/object/key persistence, registration lockout, sign out and sign in.",
   );
 } catch (error) {
   console.error(logs);

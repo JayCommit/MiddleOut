@@ -26,6 +26,17 @@ for number, data in [(1,b"a"*(5*1024*1024)),(2,b"b")]:
     parts.append({"PartNumber":number,"ETag":result["ETag"]})
 client.complete_multipart_upload(Bucket=bucket, Key="multipart", UploadId=mp["UploadId"], MultipartUpload={"Parts":parts})
 assert client.get_object(Bucket=bucket, Key="multipart")["Body"].read() == b"a"*(5*1024*1024)+b"b"
+lifecycle_rules = {"Rules": [
+    {"ID": "expire-client-artifacts", "Status": "Enabled", "Filter": {"And": {"Prefix": "folder/", "Tags": [{"Key": "retention", "Value": "short"}], "ObjectSizeGreaterThan": 0}}, "Expiration": {"Days": 30}},
+    {"ID": "abort-client-uploads", "Status": "Enabled", "Filter": {"Prefix": "temporary/"}, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}
+]}
+client.put_bucket_lifecycle_configuration(Bucket=bucket, LifecycleConfiguration=lifecycle_rules)
+returned_rules = client.get_bucket_lifecycle_configuration(Bucket=bucket)["Rules"]
+assert returned_rules[0]["Filter"]["And"]["Prefix"] == "folder/"
+assert returned_rules[0]["Expiration"]["Days"] == 30
+assert returned_rules[1]["AbortIncompleteMultipartUpload"]["DaysAfterInitiation"] == 7
+client.delete_bucket_lifecycle(Bucket=bucket)
+print("PASS: boto3 SigV4 lifecycle put/get/delete with combined filters and abort action")
 print("PASS: boto3 signing, bytes, ranges, head, copy, tags, presigned URLs, pagination and multipart")
 with tempfile.TemporaryDirectory(prefix="middleout-client-") as tmp:
     source=pathlib.Path(tmp)/"source.bin"; target=pathlib.Path(tmp)/"download.bin"; source.write_bytes(payload)
@@ -36,6 +47,14 @@ with tempfile.TemporaryDirectory(prefix="middleout-client-") as tmp:
     listing=subprocess.check_output(aws+["s3api","list-objects-v2","--bucket",bucket,"--prefix","aws-cli"])
     assert json.loads(listing)["Contents"][0]["Key"] == "aws-cli"
     print("PASS: AWS CLI upload, download and listing")
+    configfile=pathlib.Path(tmp)/"lifecycle.json"
+    configfile.write_text(json.dumps({"Rules": [{"ID": "cli-retention", "Status": "Enabled", "Filter": {}, "Expiration": {"Days": 7}}]}))
+    subprocess.run(aws+["s3api","put-bucket-lifecycle-configuration","--bucket",bucket,"--lifecycle-configuration",f"file://{configfile}"],check=True)
+    lifecycle=json.loads(subprocess.check_output(aws+["s3api","get-bucket-lifecycle-configuration","--bucket",bucket]))
+    assert lifecycle["Rules"][0]["ID"] == "cli-retention"
+    assert "Expiration" in client.head_object(Bucket=bucket,Key="copied")
+    subprocess.run(aws+["s3api","delete-bucket-lifecycle","--bucket",bucket],check=True)
+    print("PASS: AWS CLI lifecycle put/get/delete and object expiration headers")
     rclone=os.environ.get("RCLONE_BIN","rclone")
     remote=f":s3,provider=Other,env_auth=true,endpoint='{endpoint}',force_path_style=true:"
     subprocess.run([rclone,"copyto",str(source),remote+bucket+"/rclone", "--s3-no-check-bucket", "--s3-disable-checksum"],check=True)

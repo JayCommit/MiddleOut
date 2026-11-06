@@ -10,6 +10,7 @@ const result = spawnSync(
     "src/lib/s3/s3-engine.test.ts",
     "src/lib/storage/pure.test.ts",
     "src/lib/storage/features.test.ts",
+    "src/lib/storage/lifecycle.test.ts",
     "src/lib/storage/regressions.test.ts",
     "src/lib/storage/gdrive.test.ts",
     "src/lib/storage/agent-mcp.test.ts",

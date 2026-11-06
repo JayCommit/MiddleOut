@@ -500,3 +500,54 @@ export const revokeAgentTokenFn = createServerFn({ method: "POST" })
     const { revokeAgentToken } = await import("./agents.server");
     return revokeAgentToken(context.userId, data.tokenId);
   });
+
+// Bucket lifecycle: preview never deletes; writes use revisions to detect concurrent edits.
+export const getLifecycleFn = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .validator((input: { bucket: string }) => ({ bucket: asStr(input?.bucket, 128) }))
+  .handler(async ({ context, data }) => {
+    const { getLifecycle } = await import("./lifecycle.server");
+    return getLifecycle(context.userId, data.bucket);
+  });
+
+export const previewLifecycleFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { bucket: string; rules: import("./lifecycle").LifecycleRule[] }) => ({
+    bucket: asStr(input?.bucket, 128),
+    rules: input?.rules,
+  }))
+  .handler(async ({ context, data }) => {
+    const { previewLifecycle } = await import("./lifecycle.server");
+    return previewLifecycle(context.userId, data.bucket, data.rules);
+  });
+
+export const saveLifecycleFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    (input: {
+      bucket: string;
+      rules: import("./lifecycle").LifecycleRule[];
+      revision: string | null;
+    }) => ({
+      bucket: asStr(input?.bucket, 128),
+      rules: input?.rules,
+      revision: typeof input?.revision === "string" ? input.revision : null,
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    const { setLifecycle, deleteLifecycle } = await import("./lifecycle.server");
+    return data.rules?.length === 0
+      ? deleteLifecycle(context.userId, data.bucket, data.revision)
+      : setLifecycle(context.userId, data.bucket, data.rules, data.revision);
+  });
+
+export const runLifecycleNowFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { bucket: string; revision: string | null }) => ({
+    bucket: asStr(input?.bucket, 128),
+    revision: typeof input?.revision === "string" ? input.revision : null,
+  }))
+  .handler(async ({ context, data }) => {
+    const { runLifecycleNow } = await import("./lifecycle.server");
+    return runLifecycleNow(context.userId, data.bucket, data.revision);
+  });

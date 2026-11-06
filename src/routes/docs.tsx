@@ -21,7 +21,11 @@ const ROWS = [
   ["Access Key Scoping (Read-Only & Bucket-Restricted)", "Yes"],
   ["aws-chunked request bodies", "Unsupported (HTTP 501)"],
   ["Public-read buckets", "Yes"],
-  ["Versioning, object lock, lifecycle, SSE", "No"],
+  [
+    "Bucket lifecycle (local buckets)",
+    "Yes: age/date expiration, prefix/tag/size filters, incomplete upload cleanup",
+  ],
+  ["Versioning, object lock, SSE", "No"],
   ["Virtual-hosted bucket DNS", "No. Path-style only"],
 ];
 

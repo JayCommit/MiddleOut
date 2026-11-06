@@ -8,6 +8,7 @@ Self-hosted, S3-compatible object storage with a web console. Run it with Docker
 - Keep buckets private or enable public reads.
 - Share files with expiring links.
 - Use S3 uploads, multipart uploads, downloads, copies, tags, and scoped access keys.
+- Set bucket lifecycle rules to expire old files and clean up unfinished uploads, with a preview before enabling them.
 - Manage account settings, storage limits, sessions, and an activity log.
 - Connect agents through a scoped REST API and a local MCP bridge.
 
@@ -75,6 +76,12 @@ For rclone, use the S3 provider **Other**, endpoint `http://localhost:8080/api/s
 
 Storage limits can also be changed in Settings. See [.env.example](.env.example) for other options and [OPERATIONS.md](OPERATIONS.md) for HTTPS, backups, password recovery, metrics, and upgrades.
 
+## Automatic retention
+
+Open a bucket’s **Lifecycle** tab to create rules, preview eligible files, and enable automatic cleanup. Local buckets support expiration by age or UTC date, prefix/tag/size filters, and aborting unfinished multipart uploads. Standard S3 lifecycle commands work too.
+
+See [LIFECYCLE.md](LIFECYCLE.md) for examples, timing, and supported actions.
+
 ## Agent access
 
 Create a token under **AI & Agents**, choosing its permissions, bucket scope, and expiry. REST requests use `Authorization: Bearer mo_agent_live_...`.
@@ -102,7 +109,7 @@ The bridge exposes six tools for listing buckets and files, reading and writing 
 
 - One storage node. Embedded storage requires one process per `DATA_DIR`; multiple application processes require external Postgres.
 - Object bytes are stored as base64 database parts. Transfers can load entire objects into memory, so measure your workload before raising limits.
-- S3 uses path-style addressing. Versioning, lifecycle rules, object lock, IAM bucket policies, server-side encryption, and signed streaming / `aws-chunked` requests are unsupported.
+- S3 uses path-style addressing. Versioning, object lock, IAM bucket policies, server-side encryption, and signed streaming / `aws-chunked` requests are unsupported.
 - Bucket CORS configuration is stored but is not enforced per bucket.
 - Uploaded websites are served as downloads rather than hosted as same-origin pages.
 - Scratch buckets are removed by periodic maintenance after expiry; expiry is not an immediate access cutoff.
