@@ -41,6 +41,7 @@ type ObjectRow = {
   content_type: string;
   etag: string;
   updated_at: unknown;
+  written_at?: unknown;
   headers: string;
   data_parts?: string[];
   bucket_id?: string;
@@ -829,7 +830,7 @@ export async function finishUpload(ownerId: string, objectId: string) {
       return { ok: true as const, etag: result.etag || etag };
     }
     await sql`delete from mo_objects where bucket_id = ${row.bucket_id} and key = ${row.key} and complete = true`;
-    await sql`update mo_objects set etag = ${etag}, complete = true, updated_at = now() where id = ${objectId}`;
+    await sql`update mo_objects set etag = ${etag}, complete = true, updated_at = now(), written_at = now() where id = ${objectId}`;
     await audit(sql, ownerId, "object.put", `${row.bucket}/${row.key}`);
     return { ok: true as const, etag };
   });
@@ -885,7 +886,9 @@ export async function cleanupExpired(maxAgeSeconds = 86400) {
 
   const auditCutoff = new Date(Date.now() - auditRetentionDays * 86400000).toISOString();
   await sql`delete from mo_audit where id in (select id from mo_audit where created_at < ${auditCutoff} limit 1000)`;
-  return { ok: true as const };
+  const { runLifecycleMaintenance } = await import("./lifecycle.server.ts");
+  const lifecycle = await runLifecycleMaintenance();
+  return { ok: true as const, lifecycle };
 }
 
 export async function removeObject(ownerId: string, bucketName: string, key: string) {
@@ -963,7 +966,7 @@ export async function moveObject(
     const source = sourceRows[0];
     if (!source) return { ok: false as const, error: "Object not found.", code: "NoSuchKey" };
     await sql`delete from mo_objects where bucket_id = ${bucket.id} and key = ${destKey} and complete = true`;
-    await sql`update mo_objects set key = ${destKey}, updated_at = now() where id = ${source.id}`;
+    await sql`update mo_objects set key = ${destKey}, updated_at = now(), written_at = now() where id = ${source.id}`;
     await audit(sql, ownerId, "object.move", `${bucketName}: ${sourceKey} -> ${destKey}`);
     return { ok: true as const, etag: source.etag };
   });
@@ -1122,6 +1125,7 @@ export async function setTags(
     seen.add(tag.key);
   }
   return (await getSql()).transaction(async (sql) => {
+    await lockAccountForQuota(sql, ownerId);
     const rows = await sql<{ id: string }>`
       select o.id from mo_objects o
       join mo_buckets b on b.id = o.bucket_id
@@ -1155,15 +1159,17 @@ export async function getObjectTags(ownerId: string | null, bucketName: string, 
 }
 
 export async function deleteObjectTags(ownerId: string, bucketName: string, key: string) {
-  const sql = await getSql();
-  const bucket = await ownedBucket(sql, ownerId, bucketName);
-  if (!bucket) return { ok: false as const, error: "NoSuchBucket" };
-  const rows = await sql<{ id: string }>`
+  return (await getSql()).transaction(async (sql) => {
+    await lockAccountForQuota(sql, ownerId);
+    const bucket = await ownedBucket(sql, ownerId, bucketName);
+    if (!bucket) return { ok: false as const, error: "NoSuchBucket" };
+    const rows = await sql<{ id: string }>`
     select id from mo_objects where bucket_id = ${bucket.id} and key = ${key} and complete = true
   `;
-  if (!rows[0]) return { ok: false as const, error: "NoSuchKey" };
-  await sql`delete from mo_tags where object_id = ${rows[0].id}`;
-  return { ok: true as const };
+    if (!rows[0]) return { ok: false as const, error: "NoSuchKey" };
+    await sql`delete from mo_tags where object_id = ${rows[0].id}`;
+    return { ok: true as const };
+  });
 }
 
 export async function listKeys(ownerId: string) {
@@ -1542,6 +1548,7 @@ export type S3Object = {
   contentType: string;
   etag: string;
   updatedAt: string;
+  writtenAt?: string;
   headers: Record<string, string>;
   bytes: Buffer;
   acl?: string;
@@ -1598,7 +1605,7 @@ export async function readObjectFor(ownerId: string | null, bucketName: string, 
   }
 
   const rows = await sql<ObjectRow & { acl?: string }>`
-    select o.id, o.key, o.size, o.content_type, o.etag, o.updated_at, o.headers,
+    select o.id, o.key, o.size, o.content_type, o.etag, o.updated_at, o.written_at, o.headers,
       coalesce(o.acl, 'private') as acl,
       (select coalesce(json_agg(p.data order by p.part), '[]'::json) from mo_parts p where p.object_id=o.id) as data_parts
     from mo_objects o where bucket_id = ${bucket.id} and key = ${key} and complete = true
@@ -1616,6 +1623,7 @@ export async function readObjectFor(ownerId: string | null, bucketName: string, 
       contentType: row.content_type,
       etag: row.etag,
       updatedAt: iso(row.updated_at),
+      writtenAt: iso(row.written_at),
       headers: parseHeaders(row.headers),
       bytes: objectBytes(row.data_parts),
       acl: row.acl || "private",

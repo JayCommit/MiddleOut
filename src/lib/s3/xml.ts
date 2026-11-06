@@ -210,7 +210,7 @@ export function withCors(res: Response): Response {
   headers.set("access-control-allow-headers", "*");
   headers.set(
     "access-control-expose-headers",
-    "ETag, x-amz-request-id, Content-Range, Accept-Ranges, x-amz-checksum-crc32, x-amz-error-code",
+    "ETag, x-amz-expiration, x-amz-request-id, Content-Range, Accept-Ranges, x-amz-checksum-crc32, x-amz-error-code",
   );
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }

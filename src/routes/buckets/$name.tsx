@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   CheckSquare,
+  Clock,
   Cloud,
   Copy,
   Download,
@@ -27,6 +28,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { LifecyclePanel } from "@/components/lifecycle-panel";
 import { Authed } from "@/components/authed";
 import { Shell } from "@/components/shell";
 import { Button, EmptyState, Field, Input, Modal, Pill } from "@/components/ui";
@@ -80,7 +82,9 @@ function BrowserPage() {
   const [tagValue, setTagValue] = useState("");
 
   // AWS S3 Console Tabs
-  const [activeTab, setActiveTab] = useState<"objects" | "properties" | "permissions">("objects");
+  const [activeTab, setActiveTab] = useState<
+    "objects" | "properties" | "permissions" | "lifecycle"
+  >("objects");
 
   // ACL & Permissions State
   const [editAclOpen, setEditAclOpen] = useState(false);
@@ -406,12 +410,14 @@ function BrowserPage() {
                 {data?.bucket.provider === "gdrive" && (
                   <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-500/30">
                     <Cloud className="h-3 w-3" />
-                    Google Drive {data.bucket.providerConfig?.mountMode === "ro" ? "(Read-Only)" : "(Mounted)"}
+                    Google Drive{" "}
+                    {data.bucket.providerConfig?.mountMode === "ro" ? "(Read-Only)" : "(Mounted)"}
                   </span>
                 )}
                 {data?.bucket.isScratch && (
                   <span className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-400 border border-amber-500/30">
-                    Ephemeral Scratch {data.bucket.expiresAt ? `(Expires ${formatWhen(data.bucket.expiresAt)})` : ""}
+                    Ephemeral Scratch{" "}
+                    {data.bucket.expiresAt ? `(Expires ${formatWhen(data.bucket.expiresAt)})` : ""}
                   </span>
                 )}
               </div>
@@ -490,7 +496,7 @@ function BrowserPage() {
           </div>
 
           {/* S3 Tabs */}
-          <div className="mt-2 flex border-b border-border">
+          <div className="mt-2 flex overflow-x-auto border-b border-border">
             <button
               type="button"
               onClick={() => setActiveTab("objects")}
@@ -527,8 +533,27 @@ function BrowserPage() {
               <ShieldCheck className="h-4 w-4" />
               Permissions (ACL)
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("lifecycle")}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "lifecycle" ? "border-primary text-fg" : "border-transparent text-muted hover:text-fg hover:border-border"}`}
+            >
+              <Clock className="h-4 w-4" />
+              Lifecycle
+            </button>
           </div>
         </div>
+
+        {activeTab === "lifecycle" && data && (
+          <LifecyclePanel
+            key={name}
+            bucket={name}
+            provider={data.bucket.provider}
+            onCleanup={() => {
+              void load();
+            }}
+          />
+        )}
 
         {/* TAB 1: OBJECTS */}
         {activeTab === "objects" && (
@@ -924,7 +949,8 @@ function BrowserPage() {
                 <div className="rounded-md border border-border/50 bg-bg/50 p-3">
                   <dt className="text-xs font-medium text-muted">Total objects & size</dt>
                   <dd className="mt-1 text-sm font-medium">
-                    {data?.bucket.objectCount ?? 0} object(s) · {formatBytes(data?.bucket.totalBytes ?? 0)}
+                    {data?.bucket.objectCount ?? 0} object(s) ·{" "}
+                    {formatBytes(data?.bucket.totalBytes ?? 0)}
                   </dd>
                 </div>
               </dl>
@@ -1241,27 +1267,28 @@ function BrowserPage() {
               </label>
             </div>
 
-            {(selectedAcl === "public-read" || selectedAcl === "public-read-write") && !isPublic && (
-              <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
-                  <div>
-                    <p className="font-medium">Public access warning</p>
-                    <p className="mt-1 text-muted">
-                      Granting public access allows anyone on the internet to access this bucket.
-                    </p>
-                    <label className="mt-2.5 flex items-center gap-2 cursor-pointer font-medium text-fg">
-                      <input
-                        type="checkbox"
-                        checked={aclAcknowledge}
-                        onChange={(e) => setAclAcknowledge(e.target.checked)}
-                      />
-                      I acknowledge that this bucket will become publicly accessible.
-                    </label>
+            {(selectedAcl === "public-read" || selectedAcl === "public-read-write") &&
+              !isPublic && (
+                <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
+                    <div>
+                      <p className="font-medium">Public access warning</p>
+                      <p className="mt-1 text-muted">
+                        Granting public access allows anyone on the internet to access this bucket.
+                      </p>
+                      <label className="mt-2.5 flex items-center gap-2 cursor-pointer font-medium text-fg">
+                        <input
+                          type="checkbox"
+                          checked={aclAcknowledge}
+                          onChange={(e) => setAclAcknowledge(e.target.checked)}
+                        />
+                        I acknowledge that this bucket will become publicly accessible.
+                      </label>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
             <div className="mt-6 flex justify-end gap-3">
               <Button type="button" variant="outline" onClick={() => setEditAclOpen(false)}>
@@ -1293,7 +1320,8 @@ function BrowserPage() {
             <div className="mt-4 rounded-md border border-border bg-bg p-3 text-xs">
               <p className="font-medium text-fg">Current status: {isPublic ? "Public" : "Private"}</p>
               <p className="mt-1 text-muted">
-                Target status: {isPublic ? "Block all public access (ON)" : "Allow public read access (OFF)"}
+                Target status:{" "}
+                {isPublic ? "Block all public access (ON)" : "Allow public read access (OFF)"}
               </p>
             </div>
 
@@ -1494,11 +1522,19 @@ function BrowserPage() {
               <div className="flex items-center justify-between">
                 <span className="text-muted">Public URL:</span>
                 <div className="flex items-center gap-1 font-mono">
-                  <span className="truncate max-w-[18rem]">{withBase(`/api/public/${encodeURIComponent(name)}/${encodeKeyPath(preview.key)}`)}</span>
+                  <span className="truncate max-w-[18rem]">
+                    {withBase(
+                      `/api/public/${encodeURIComponent(name)}/${encodeKeyPath(preview.key)}`,
+                    )}
+                  </span>
                   <button
                     type="button"
                     onClick={() => {
-                      void navigator.clipboard.writeText(absoluteUrl(`/api/public/${encodeURIComponent(name)}/${encodeKeyPath(preview.key)}`));
+                      void navigator.clipboard.writeText(
+                        absoluteUrl(
+                          `/api/public/${encodeURIComponent(name)}/${encodeKeyPath(preview.key)}`,
+                        ),
+                      );
                       toast.success("Public URL copied");
                     }}
                     className="ml-1 text-muted hover:text-fg"
@@ -1511,10 +1547,21 @@ function BrowserPage() {
 
             {/* Properties summary */}
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted sm:grid-cols-4">
-              <div>Size: <span className="text-fg font-mono">{formatBytes(preview.size)}</span></div>
-              <div>Type: <span className="text-fg font-mono">{preview.contentType || guessType(preview.key)}</span></div>
-              <div>ETag: <span className="text-fg font-mono">{preview.etag.slice(0, 10)}…</span></div>
-              <div>Class: <span className="text-fg">Standard</span></div>
+              <div>
+                Size: <span className="text-fg font-mono">{formatBytes(preview.size)}</span>
+              </div>
+              <div>
+                Type:{" "}
+                <span className="text-fg font-mono">
+                  {preview.contentType || guessType(preview.key)}
+                </span>
+              </div>
+              <div>
+                ETag: <span className="text-fg font-mono">{preview.etag.slice(0, 10)}…</span>
+              </div>
+              <div>
+                Class: <span className="text-fg">Standard</span>
+              </div>
             </div>
 
             {/* Media/Text Preview */}

@@ -1,3 +1,11 @@
+import { LifecycleError } from "../storage/lifecycle.ts";
+import {
+  getLifecycle,
+  setLifecycle,
+  deleteLifecycle,
+  objectExpirationHeader,
+} from "../storage/lifecycle.server.ts";
+import { parseLifecycleXml, lifecycleXml } from "../storage/lifecycle-xml.ts";
 import { maxRequestBytes } from "../../../scripts/runtime-config.mjs";
 import { objectResponseHeaders } from "../storage/response-headers.ts";
 import { BodyTooLarge, readBoundedBody, transportAddress } from "./body.ts";
@@ -272,6 +280,48 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     );
   }
 
+  // Lifecycle configuration is private to the bucket owner; public data grants do not apply.
+  if (url.searchParams.has("lifecycle")) {
+    if (key)
+      return withCors(
+        xmlError(400, "InvalidRequest", "Lifecycle configuration applies to a bucket."),
+      );
+    if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
+    const record = await bucketRecord(bucket);
+    if (!record) return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist."));
+    if (record.owner_id !== ownerId)
+      return withCors(xmlError(403, "AccessDenied", "Access denied."));
+    try {
+      if (method === "GET") {
+        const result = await getLifecycle(ownerId, bucket);
+        if (!result.rules.length)
+          return withCors(
+            xmlError(
+              404,
+              "NoSuchLifecycleConfiguration",
+              "The lifecycle configuration does not exist.",
+            ),
+          );
+        return withCors(xmlResponse(200, lifecycleXml(result.rules)));
+      }
+      if (method === "PUT") {
+        await setLifecycle(ownerId, bucket, parseLifecycleXml(body.toString("utf8")));
+        return withCors(new Response(null, { status: 200 }));
+      }
+      if (method === "DELETE") {
+        await deleteLifecycle(ownerId, bucket);
+        return withCors(new Response(null, { status: 204 }));
+      }
+      return withCors(
+        xmlError(405, "MethodNotAllowed", "Use GET, PUT or DELETE for lifecycle configuration."),
+      );
+    } catch (error) {
+      if (error instanceof LifecycleError)
+        return withCors(xmlError(error.status, error.code, error.message));
+      throw error;
+    }
+  }
+
   // Location Constraint
   if (url.searchParams.has("location") && !key && (method === "GET" || method === "HEAD")) {
     const record = await bucketRecord(bucket);
@@ -327,11 +377,20 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   if (url.searchParams.has("acl") && key && (method === "GET" || method === "HEAD")) {
     const record = await bucketRecord(bucket);
     if (!record)
-      return withCors(xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}/${key}`));
+      return withCors(
+        xmlError(404, "NoSuchBucket", "The bucket does not exist.", `/${bucket}/${key}`),
+      );
     const res = await getObjectAcl(ownerId, bucket, key);
     if (!res.ok) {
       const code = res.error === "NoSuchKey" ? "NoSuchKey" : "AccessDenied";
-      return withCors(xmlError(code === "NoSuchKey" ? 404 : 403, code, code === "AccessDenied" ? "Access denied." : "The specified key does not exist.", `/${bucket}/${key}`));
+      return withCors(
+        xmlError(
+          code === "NoSuchKey" ? 404 : 403,
+          code,
+          code === "AccessDenied" ? "Access denied." : "The specified key does not exist.",
+          `/${bucket}/${key}`,
+        ),
+      );
     }
     const allUsers = res.isPublic
       ? `<Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant>`
@@ -876,6 +935,13 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       "last-modified": new Date(object.updatedAt).toUTCString(),
       "accept-ranges": "bytes",
     });
+    if (object.writtenAt) {
+      const expiration = await objectExpirationHeader(found.bucket.id, {
+        ...object,
+        writtenAt: object.writtenAt,
+      });
+      if (expiration) headers.set("x-amz-expiration", expiration);
+    }
     if (range) headers.set("content-range", `bytes ${start}-${end}/${object.bytes.length}`);
     for (const [name, value] of Object.entries(object.headers)) headers.set(name, value);
     objectResponseHeaders(headers, key);
