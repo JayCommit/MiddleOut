@@ -151,18 +151,29 @@ impl From<StorageError> for S3Error {
             StorageError::EntityTooLarge(m) => {
                 S3Error::new(StatusCode::PAYLOAD_TOO_LARGE, "EntityTooLarge", m)
             }
-            StorageError::Database(e) => S3Error::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "InternalError",
-                e.to_string(),
-            ),
-            StorageError::Io(e) => S3Error::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "InternalError",
-                e.to_string(),
-            ),
+            StorageError::Database(e) => {
+                tracing::error!(error = %e, "Storage database error");
+                S3Error::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "InternalError",
+                    "We encountered an internal error. Please try again.",
+                )
+            }
+            StorageError::Io(e) => {
+                tracing::error!(error = %e, "Storage I/O error");
+                S3Error::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "InternalError",
+                    "We encountered an internal error. Please try again.",
+                )
+            }
             StorageError::Internal(m) => {
-                S3Error::new(StatusCode::INTERNAL_SERVER_ERROR, "InternalError", m)
+                tracing::error!(error = %m, "Storage internal error");
+                S3Error::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "InternalError",
+                    "We encountered an internal error. Please try again.",
+                )
             }
         }
     }

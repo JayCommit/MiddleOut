@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppConfig {
     pub host: String,
     pub port: u16,
@@ -11,6 +11,22 @@ pub struct AppConfig {
     pub admin_password: String,
     pub region: String,
     pub max_object_bytes: usize,
+}
+
+impl std::fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("data_dir", &self.data_dir)
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"[REDACTED]")
+            .field("admin_user", &self.admin_user)
+            .field("admin_password", &"[REDACTED]")
+            .field("region", &self.region)
+            .field("max_object_bytes", &self.max_object_bytes)
+            .finish()
+    }
 }
 
 impl AppConfig {

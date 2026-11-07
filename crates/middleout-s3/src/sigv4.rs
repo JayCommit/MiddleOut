@@ -87,11 +87,13 @@ pub fn canonical_query_string(raw_query: &str, exclude_signature: bool) -> Strin
                 Some((k, v)) => (k, v),
                 None => (part, ""),
             };
-            let decoded_k = percent_decode_str(raw_k).decode_utf8_lossy();
+            let k_plus = raw_k.replace('+', " ");
+            let v_plus = raw_v.replace('+', " ");
+            let decoded_k = percent_decode_str(&k_plus).decode_utf8_lossy();
             if exclude_signature && decoded_k == "X-Amz-Signature" {
                 return None;
             }
-            let decoded_v = percent_decode_str(raw_v).decode_utf8_lossy();
+            let decoded_v = percent_decode_str(&v_plus).decode_utf8_lossy();
             let enc_k = utf8_percent_encode(&decoded_k, S3_ENCODE_SET).to_string();
             let enc_v = utf8_percent_encode(&decoded_v, S3_ENCODE_SET).to_string();
             Some((enc_k, enc_v))
@@ -353,13 +355,34 @@ fn verify_header_auth(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| S3Error::access_denied("Missing x-amz-date or Date header"))?;
 
-    // Validate date format
-    let _parsed_dt = parse_amz_date(amz_date_str)?;
+    // Validate date format and enforce 15-minute clock skew window
+    let parsed_dt = parse_amz_date(amz_date_str)?;
+    let now = Utc::now();
+    if (now - parsed_dt).num_seconds().abs() > 15 * 60 {
+        return Err(S3Error::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "RequestTimeTooSkewed",
+            "The difference between the request time and the current time is too large.",
+        ));
+    }
+    if parsed_dt.format("%Y%m%d").to_string() != scope.date_stamp {
+        return Err(S3Error::access_denied(
+            "Date in Credential scope does not match x-amz-date header",
+        ));
+    }
 
     let signed_headers_list: Vec<String> = signed_headers_raw
         .split(';')
         .map(|s| s.to_string())
         .collect();
+    if !signed_headers_list
+        .iter()
+        .any(|h| h.trim().eq_ignore_ascii_case("host"))
+    {
+        return Err(S3Error::access_denied(
+            "Host header must be included in SignedHeaders",
+        ));
+    }
     let (canonical_headers, signed_headers) =
         build_canonical_headers(&signed_headers_list, headers, uri)?;
 
@@ -477,10 +500,17 @@ fn verify_presigned_auth(
     }
 
     let signed_at = parse_amz_date(amz_date_str)?;
-    let now = Utc::now();
-    if signed_at > now + chrono::Duration::minutes(5) {
+    if signed_at.format("%Y%m%d").to_string() != scope.date_stamp {
         return Err(S3Error::access_denied(
-            "Request date is too far in the future",
+            "Date in X-Amz-Credential scope does not match X-Amz-Date",
+        ));
+    }
+    let now = Utc::now();
+    if signed_at > now + chrono::Duration::minutes(15) {
+        return Err(S3Error::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "RequestTimeTooSkewed",
+            "The difference between the request time and the current time is too large.",
         ));
     }
     let expires_at = signed_at + chrono::Duration::seconds(expires_secs);
@@ -492,6 +522,14 @@ fn verify_presigned_auth(
         .split(';')
         .map(|s| s.to_string())
         .collect();
+    if !signed_headers_list
+        .iter()
+        .any(|h| h.trim().eq_ignore_ascii_case("host"))
+    {
+        return Err(S3Error::access_denied(
+            "Host header must be included in X-Amz-SignedHeaders",
+        ));
+    }
     let (canonical_headers, signed_headers) =
         build_canonical_headers(&signed_headers_list, headers, uri)?;
 
@@ -573,6 +611,7 @@ pub fn decode_payload_if_aws_chunked(
 fn decode_aws_chunked_bytes(input: &[u8]) -> Result<Bytes, S3Error> {
     let mut out = BytesMut::with_capacity(input.len());
     let mut pos = 0;
+    let mut saw_terminal_chunk = false;
 
     while pos < input.len() {
         // Find \r\n for the chunk header line
@@ -592,11 +631,15 @@ fn decode_aws_chunked_bytes(input: &[u8]) -> Result<Bytes, S3Error> {
         pos += line_end + 2; // skip header line and \r\n
 
         if chunk_size == 0 {
+            saw_terminal_chunk = true;
             // Final 0-byte chunk reached; remaining bytes are optional trailers + \r\n
             break;
         }
 
-        if pos + chunk_size > input.len() {
+        if pos
+            .checked_add(chunk_size)
+            .is_none_or(|end| end > input.len())
+        {
             return Err(S3Error::invalid_request(
                 "Truncated aws-chunked data payload",
             ));
@@ -612,6 +655,12 @@ fn decode_aws_chunked_bytes(input: &[u8]) -> Result<Bytes, S3Error> {
             ));
         }
         pos += 2;
+    }
+
+    if !saw_terminal_chunk {
+        return Err(S3Error::invalid_request(
+            "Incomplete aws-chunked payload: missing terminal 0-size chunk",
+        ));
     }
 
     Ok(out.freeze())
@@ -699,9 +748,13 @@ mod tests {
     #[test]
     fn test_valid_header_sigv4_and_special_chars() {
         let cfg = test_config();
-        let uri: Uri = "/my-bucket/folder/hello%20world+test.txt?list-type=2&prefix=folder%2F"
-            .parse()
-            .unwrap();
+        let now = Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date_stamp = now.format("%Y%m%d").to_string();
+        let uri: Uri =
+            "/my-bucket/folder/hello%20world+test.txt?list-type=2&prefix=folder%2F&tag=a+b"
+                .parse()
+                .unwrap();
         let mut headers = HeaderMap::new();
         let body = b"hello world payload";
         sign_header_request(
@@ -710,8 +763,8 @@ mod tests {
             &mut headers,
             body,
             &cfg,
-            "20261107T013000Z",
-            "20261107",
+            &amz_date,
+            &date_stamp,
             "us-east-1",
         );
 
@@ -727,6 +780,9 @@ mod tests {
     #[test]
     fn test_header_sigv4_wrong_signature() {
         let cfg = test_config();
+        let now = Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date_stamp = now.format("%Y%m%d").to_string();
         let uri: Uri = "/my-bucket/key.txt".parse().unwrap();
         let mut headers = HeaderMap::new();
         sign_header_request(
@@ -735,8 +791,8 @@ mod tests {
             &mut headers,
             b"",
             &cfg,
-            "20261107T013000Z",
-            "20261107",
+            &amz_date,
+            &date_stamp,
             "us-east-1",
         );
         // Tamper with authorization signature
@@ -758,6 +814,9 @@ mod tests {
         let cfg = test_config();
         let mut wrong_cfg = cfg.clone();
         wrong_cfg.access_key_id = "WRONGKEY".to_string();
+        let now = Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date_stamp = now.format("%Y%m%d").to_string();
 
         let uri: Uri = "/my-bucket/key.txt".parse().unwrap();
         let mut headers = HeaderMap::new();
@@ -767,8 +826,8 @@ mod tests {
             &mut headers,
             b"",
             &wrong_cfg,
-            "20261107T013000Z",
-            "20261107",
+            &amz_date,
+            &date_stamp,
             "us-east-1",
         );
 
@@ -780,6 +839,9 @@ mod tests {
     #[test]
     fn test_header_sigv4_payload_hash_mismatch() {
         let cfg = test_config();
+        let now = Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date_stamp = now.format("%Y%m%d").to_string();
         let uri: Uri = "/my-bucket/key.txt".parse().unwrap();
         let mut headers = HeaderMap::new();
         sign_header_request(
@@ -788,8 +850,8 @@ mod tests {
             &mut headers,
             b"original body",
             &cfg,
-            "20261107T013000Z",
-            "20261107",
+            &amz_date,
+            &date_stamp,
             "us-east-1",
         );
 
@@ -797,6 +859,27 @@ mod tests {
             verify_request_auth(&Method::PUT, &uri, &headers, b"tampered body", &cfg).unwrap_err();
         assert_eq!(err.code, "XAmzContentSHA256Mismatch");
         assert_eq!(err.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_header_sigv4_clock_skew_rejected() {
+        let cfg = test_config();
+        let uri: Uri = "/my-bucket/key.txt".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        sign_header_request(
+            &Method::GET,
+            &uri,
+            &mut headers,
+            b"",
+            &cfg,
+            "20200101T000000Z",
+            "20200101",
+            "us-east-1",
+        );
+
+        let err = verify_request_auth(&Method::GET, &uri, &headers, b"", &cfg).unwrap_err();
+        assert_eq!(err.code, "RequestTimeTooSkewed");
+        assert_eq!(err.status, axum::http::StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -887,6 +970,12 @@ mod tests {
         let chunked = b"5;chunk-signature=deadbeef\r\nhello\r\n6;chunk-signature=cafebabe\r\n world\r\n0;chunk-signature=0000\r\n\r\n";
         let decoded = decode_payload_if_aws_chunked(&headers, Bytes::from_static(chunked)).unwrap();
         assert_eq!(&decoded[..], b"hello world");
+
+        // Truncated aws-chunked missing terminal 0-size chunk must fail
+        let truncated = b"5;chunk-signature=deadbeef\r\nhello\r\n";
+        let err =
+            decode_payload_if_aws_chunked(&headers, Bytes::from_static(truncated)).unwrap_err();
+        assert_eq!(err.code, "InvalidRequest");
 
         // Non-chunked passthrough
         let normal_headers = HeaderMap::new();

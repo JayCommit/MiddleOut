@@ -133,6 +133,14 @@ fn append_object_headers(headers: &mut HeaderMap, meta: &ObjectMeta, content_len
         headers.insert(header::LAST_MODIFIED, v);
     }
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
+    );
 
     for (k, v) in &meta.user_meta {
         let header_name_str = format!("x-amz-meta-{}", k.to_ascii_lowercase());
@@ -821,13 +829,16 @@ mod tests {
     ) -> HttpRequest<Body> {
         let body_bytes: Bytes = body.into();
         let uri: Uri = uri_str.parse().unwrap();
-        let amz_date = "20261107T013000Z";
-        let date_stamp = "20261107";
+        let now = chrono::Utc::now();
+        let amz_date_str = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date_stamp_str = now.format("%Y%m%d").to_string();
+        let amz_date = amz_date_str.as_str();
+        let date_stamp = date_stamp_str.as_str();
         let region = &config.region;
 
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("localhost:9000"));
-        headers.insert("x-amz-date", HeaderValue::from_static(amz_date));
+        headers.insert("x-amz-date", HeaderValue::from_str(amz_date).unwrap());
 
         for (k, v) in extra_headers {
             headers.insert(

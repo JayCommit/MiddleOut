@@ -170,9 +170,9 @@ pub fn validate_bucket_name(name: &str) -> StorageResult<()> {
         }
     }
 
-    if name.contains("..") {
+    if name.contains("..") || name.contains(".-") || name.contains("-.") {
         return Err(StorageError::InvalidBucketName(format!(
-            "bucket name cannot contain consecutive periods: '{name}'"
+            "bucket name cannot contain '..', '.-', or '-.': '{name}'"
         )));
     }
 
@@ -354,6 +354,13 @@ impl StorageEngine {
         let db_path = data_dir.join("metadata.db");
         let conn = Connection::open(&db_path)?;
 
+        // Clean up any leftover staging files from a prior crash
+        if let Ok(entries) = fs::read_dir(data_dir.join("staging")) {
+            for entry in entries.flatten() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+
         conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
@@ -450,10 +457,14 @@ impl StorageEngine {
         fs::create_dir_all(&staging_dir)?;
         let staging_path = staging_dir.join(format!("tmp-{}.blob", Uuid::new_v4()));
 
-        {
+        if let Err(e) = (|| -> std::io::Result<()> {
             let mut file = File::create(&staging_path)?;
             file.write_all(data)?;
             file.sync_all()?;
+            Ok(())
+        })() {
+            let _ = fs::remove_file(&staging_path);
+            return Err(StorageError::Io(e));
         }
 
         let final_path = self.data_dir.join(dest_rel_path);
@@ -872,10 +883,14 @@ impl StorageEngine {
         let staging_path = staging_dir.join(format!("tmp-copy-{}.blob", Uuid::new_v4()));
 
         let src_full_path = self.data_dir.join(&src_blob_rel_path);
-        fs::copy(&src_full_path, &staging_path)?;
-        {
+        if let Err(e) = (|| -> StorageResult<()> {
+            fs::copy(&src_full_path, &staging_path)?;
             let f = File::open(&staging_path)?;
             f.sync_all()?;
+            Ok(())
+        })() {
+            let _ = fs::remove_file(&staging_path);
+            return Err(e);
         }
 
         let dst_blob_rel_path = Self::generate_object_blob_rel_path(dst_bucket, dst_key);
@@ -1127,12 +1142,27 @@ impl StorageEngine {
 
     // --- Multipart upload operations ---
 
+    /// Validates that `upload_id` is a safe identifier (ASCII alphanumeric and hyphens only)
+    /// to prevent path traversal when constructing `multipart/{upload_id}` filesystem paths.
+    fn validate_upload_id(upload_id: &str) -> StorageResult<()> {
+        if upload_id.is_empty()
+            || upload_id.len() > 128
+            || !upload_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Err(StorageError::NoSuchUpload(upload_id.to_string()));
+        }
+        Ok(())
+    }
+
     fn fetch_upload_info_locked(
         conn: &Connection,
         bucket: &str,
         key: &str,
         upload_id: &str,
     ) -> StorageResult<MultipartUploadInfo> {
+        Self::validate_upload_id(upload_id)?;
         let info = conn
             .query_row(
                 "
@@ -1382,7 +1412,7 @@ impl StorageEngine {
         let staging_path = staging_dir.join(format!("tmp-mp-{}.blob", Uuid::new_v4()));
 
         let mut total_size: u64 = 0;
-        {
+        let copy_res = (|| -> StorageResult<()> {
             let mut out_file = File::create(&staging_path)?;
             for (rel_path, _) in &selected_parts {
                 let part_path = self.data_dir.join(rel_path);
@@ -1391,6 +1421,11 @@ impl StorageEngine {
                 total_size += copied;
             }
             out_file.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = copy_res {
+            let _ = fs::remove_file(&staging_path);
+            return Err(e);
         }
 
         let final_blob_rel_path = Self::generate_object_blob_rel_path(bucket, key);
@@ -1592,6 +1627,14 @@ mod tests {
         ));
         assert!(matches!(
             engine.create_bucket("bad..dots", false),
+            Err(StorageError::InvalidBucketName(_))
+        ));
+        assert!(matches!(
+            engine.create_bucket("bad.-dotdash", false),
+            Err(StorageError::InvalidBucketName(_))
+        ));
+        assert!(matches!(
+            engine.create_bucket("bad-.dashdot", false),
             Err(StorageError::InvalidBucketName(_))
         ));
 
@@ -2029,6 +2072,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             engine.list_parts("mp-bucket", "aborted.bin", &init2.upload_id),
+            Err(StorageError::NoSuchUpload(_))
+        ));
+        assert!(matches!(
+            engine.list_parts("mp-bucket", "aborted.bin", "../etc/passwd"),
             Err(StorageError::NoSuchUpload(_))
         ));
     }

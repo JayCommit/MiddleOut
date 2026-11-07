@@ -201,6 +201,24 @@ pub fn is_authenticated(headers: &HeaderMap, state: &ConsoleState) -> bool {
     false
 }
 
+/// Verifies `Origin` header (if present on a state-changing request) matches `Host`.
+fn verify_same_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return true;
+    };
+    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let origin_host = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .unwrap_or(origin)
+        .split('/')
+        .next()
+        .unwrap_or("");
+    origin_host.eq_ignore_ascii_case(host.trim())
+}
+
 // --- HTML Helpers ---
 
 fn html_escape(input: &str) -> String {
@@ -517,7 +535,21 @@ fn render_flash(msg: Option<&str>, err: Option<&str>) -> String {
 }
 
 fn storage_err_message(err: &StorageError) -> String {
-    err.to_string()
+    match err {
+        StorageError::Database(e) => {
+            tracing::error!(error = %e, "Console storage database error");
+            "An internal database error occurred.".to_string()
+        }
+        StorageError::Io(e) => {
+            tracing::error!(error = %e, "Console storage I/O error");
+            "An internal storage I/O error occurred.".to_string()
+        }
+        StorageError::Internal(m) => {
+            tracing::error!(error = %m, "Console storage internal error");
+            "An internal error occurred.".to_string()
+        }
+        other => other.to_string(),
+    }
 }
 
 // --- Query & Form Structs ---
@@ -786,7 +818,7 @@ async fn create_bucket_submit(
     headers: HeaderMap,
     Form(form): Form<CreateBucketForm>,
 ) -> Response {
-    if !is_authenticated(&headers, &state) {
+    if !is_authenticated(&headers, &state) || !verify_same_origin(&headers) {
         return Redirect::to("/_console/login").into_response();
     }
     let name = form.name.trim();
@@ -815,7 +847,7 @@ async fn delete_bucket_submit(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Response {
-    if !is_authenticated(&headers, &state) {
+    if !is_authenticated(&headers, &state) || !verify_same_origin(&headers) {
         return Redirect::to("/_console/login").into_response();
     }
     let target = match state.storage.delete_bucket(&name) {
@@ -839,7 +871,7 @@ async fn toggle_bucket_visibility_submit(
     Path(name): Path<String>,
     Form(form): Form<VisibilityForm>,
 ) -> Response {
-    if !is_authenticated(&headers, &state) {
+    if !is_authenticated(&headers, &state) || !verify_same_origin(&headers) {
         return Redirect::to("/_console/login").into_response();
     }
     let public_read = matches!(form.public_read.as_str(), "true" | "on" | "1" | "yes");
@@ -1171,7 +1203,7 @@ async fn upload_object_submit(
     Path(bucket): Path<String>,
     mut multipart: Multipart,
 ) -> Response {
-    if !is_authenticated(&headers, &state) {
+    if !is_authenticated(&headers, &state) || !verify_same_origin(&headers) {
         return Redirect::to("/_console/login").into_response();
     }
 
@@ -1285,7 +1317,7 @@ async fn delete_object_submit(
     Path(bucket): Path<String>,
     Form(form): Form<DeleteObjectForm>,
 ) -> Response {
-    if !is_authenticated(&headers, &state) {
+    if !is_authenticated(&headers, &state) || !verify_same_origin(&headers) {
         return Redirect::to("/_console/login").into_response();
     }
     let prefix = form.prefix.unwrap_or_default();
@@ -1351,7 +1383,7 @@ async fn public_bucket_browser_page(
         Err(e) => {
             let body = format!(
                 r#"<div class="card"><h2>Error</h2><p class="muted">{}</p></div>"#,
-                html_escape(&e.to_string())
+                html_escape(&storage_err_message(&e))
             );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1391,7 +1423,7 @@ async fn public_bucket_browser_page(
         Err(e) => {
             let body = format!(
                 r#"<div class="card"><h2>Error</h2><p class="muted">{}</p></div>"#,
-                html_escape(&e.to_string())
+                html_escape(&storage_err_message(&e))
             );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1500,12 +1532,19 @@ fn serve_object_response(
         StatusCode::OK
     };
 
+    let quoted_etag = format!("\"{}\"", out.meta.etag.trim_matches('"'));
+
     let mut resp = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, &out.meta.content_type)
         .header(header::CONTENT_LENGTH, out.data.len().to_string())
-        .header(header::ETAG, &out.meta.etag)
+        .header(header::ETAG, &quoted_etag)
         .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; sandbox",
+        )
         .header(
             header::LAST_MODIFIED,
             out.meta
