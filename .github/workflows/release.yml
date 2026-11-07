@@ -1,104 +1,62 @@
 name: Release gates
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, rust-rewrite]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
-    inputs:
-      archive_tag:
-        description: Recover public archives for an already tested and published image tag
-        type: string
-        required: false
-      verify_version:
-        description: Verify an already published container version (for example 0.2.0)
-        type: string
-        required: false
 permissions:
   contents: read
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  verify:
-    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
+  fmt-and-clippy:
+    name: Format & Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Unit & Integration Tests (${{ matrix.os }})
     strategy:
       matrix:
-        include:
-          - { os: ubuntu-latest, node: 22 }
-          - { os: ubuntu-latest, node: 24 }
-          - { os: windows-latest, node: 22 }
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
-      - run: npm audit --omit=dev --audit-level=low
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
-      - run: npm run test:agents
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:selfhost
-  postgres:
-    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
-    strategy:
-      matrix:
-        backend: [service17, local18]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test-only-password
-          POSTGRES_DB: middleout_test
-        ports: ["5432:5432"]
-        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - run: npm run test:postgres
-        env:
-          TEST_DATABASE_URL: ${{ matrix.backend == 'service17' && 'postgresql://test:test-only-password@127.0.0.1:5432/middleout_test' || '' }}
-      - name: Verify external Postgres backup and restore
-        if: matrix.backend == 'service17'
-        shell: bash
-        run: |
-          docker exec ${{ job.services.postgres.id }} pg_dump -U test -d middleout_test -Fc -f /tmp/middleout.dump
-          docker exec ${{ job.services.postgres.id }} createdb -U test middleout_restore
-          docker exec ${{ job.services.postgres.id }} pg_restore -U test --exit-on-error -d middleout_restore /tmp/middleout.dump
-          original=$(docker exec ${{ job.services.postgres.id }} psql -U test -d middleout_test -Atc 'select count(*) from mo_parts')
-          restored=$(docker exec ${{ job.services.postgres.id }} psql -U test -d middleout_restore -Atc 'select count(*) from mo_parts')
-          test "$original" = "$restored"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
   clients:
-    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
+    name: Real S3 Client Smoke Tests (aws, boto3, rclone, curl)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 22, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-test.txt
-      - run: npm ci
-      - run: python -m pip install -r requirements-test.txt
-      - run: sudo apt-get update && sudo apt-get install -y rclone
-      - run: npm run build
-      - run: npm run test:clients
+      - name: Install S3 clients (awscli, boto3, rclone)
+        run: |
+          python -m pip install --upgrade pip boto3 awscli
+          sudo apt-get update && sudo apt-get install -y rclone
+      - name: Run smoke test suite
+        run: ./scripts/smoke-test.sh
+
   containers:
-    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
+    name: Container Build & Health Verification (${{ matrix.platform }})
     strategy:
       matrix:
         include:
@@ -108,8 +66,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 22 }
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -118,17 +74,24 @@ jobs:
           platforms: ${{ matrix.platform }}
           load: true
           tags: middleout:release-test
-      - run: node scripts/test-docker.mjs
-        env: { TEST_IMAGE: "middleout:release-test" }
-      - name: Build disk-pressure validation image
-        if: matrix.platform == 'linux/amd64'
-        run: docker build --target validation -t middleout:fault-test .
-      - name: Validate filesystem exhaustion recovery
-        if: matrix.platform == 'linux/amd64'
-        run: docker run --rm --network none --tmpfs /app/data:rw,size=128m,uid=1000,gid=1000 middleout:fault-test node --experimental-strip-types scripts/disk-pressure.mjs
+      - name: Smoke test container image
+        run: |
+          docker run -d --name middleout-test -p 18080:8080 \
+            -e MIDDLEOUT_ACCESS_KEY_ID=test-key \
+            -e MIDDLEOUT_SECRET_ACCESS_KEY=test-secret \
+            middleout:release-test
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/health >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/health | grep -q '"status":"ok"'
+          docker rm -f middleout-test
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
-    needs: [verify, postgres, clients, containers]
+    needs: [fmt-and-clippy, test, clients, containers]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -149,6 +112,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -158,90 +122,11 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           provenance: true
           sbom: true
-      - name: Publish public container archives
+      - name: Create or update GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          image="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}"
-          for arch in amd64 arm64; do
-            docker pull --platform "linux/$arch" "$image"
-            test "$(docker image inspect --platform "linux/$arch" --format '{{.Architecture}}' "$image")" = "$arch"
-            docker save --platform "linux/$arch" "$image" | gzip > "middleout-${GITHUB_REF_NAME}-linux-${arch}.tar.gz"
-          done
-          sha256sum middleout-*.tar.gz > SHA256SUMS
-          if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > release-state.txt 2>/dev/null; then
-            test "$(cat release-state.txt)" = true
-          else
-            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "Middle Out $GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "MiddleOut $GITHUB_REF_NAME" --notes-file CHANGELOG.md
           fi
-          gh release upload "$GITHUB_REF_NAME" middleout-*.tar.gz SHA256SUMS --clobber
-          gh release edit "$GITHUB_REF_NAME" --draft=false
-  recover-archives:
-    if: github.event_name == 'workflow_dispatch' && inputs.archive_tag != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: read
-      actions: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Recover archives from a validated release image
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.archive_tag }}
-        run: |
-          set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha > release-sha.txt
-          sha=$(cat release-sha.txt)
-          run=$(gh run list --workflow release.yml --event push --commit "$sha" --json databaseId,headBranch --jq ".[] | select(.headBranch == \"$RELEASE_TAG\") | .databaseId" | head -1)
-          test -n "$run"
-          gh run view "$run" --json jobs --jq '[.jobs[] | select(.name == "clients" or (.name | startswith("verify (")) or (.name | startswith("postgres (")) or (.name | startswith("containers ("))) | .conclusion] | length == 8 and all(. == "success")' | grep -qx true
-          image="ghcr.io/${GITHUB_REPOSITORY,,}:${RELEASE_TAG#v}"
-          for arch in amd64 arm64; do
-            docker pull --platform "linux/$arch" "$image"
-            test "$(docker image inspect --platform "linux/$arch" --format '{{.Architecture}}' "$image")" = "$arch"
-            test "$(docker image inspect --platform "linux/$arch" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$sha"
-            docker save --platform "linux/$arch" "$image" | gzip > "middleout-${RELEASE_TAG}-linux-${arch}.tar.gz"
-          done
-          sha256sum middleout-*.tar.gz > SHA256SUMS
-          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > release-state.txt 2>/dev/null; then
-            test "$(cat release-state.txt)" = true
-          else
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Middle Out $RELEASE_TAG" --notes-file RELEASE_NOTES.md
-          fi
-          gh release upload "$RELEASE_TAG" middleout-*.tar.gz SHA256SUMS --clobber
-          gh release edit "$RELEASE_TAG" --draft=false
-
-  verify-published-image:
-    if: github.event_name == 'workflow_dispatch' && inputs.verify_version != ''
-    strategy:
-      matrix:
-        include:
-          - { runner: ubuntu-latest, architecture: amd64 }
-          - { runner: ubuntu-24.04-arm, architecture: arm64 }
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: { node-version: 22 }
-      - name: Pull and verify the published image
-        shell: bash
-        env:
-          VERSION: ${{ inputs.verify_version }}
-          EXPECTED_ARCH: ${{ matrix.architecture }}
-        run: |
-          set -euo pipefail
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          image="ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION"
-          docker pull "$image"
-          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$EXPECTED_ARCH"
-          TEST_IMAGE="$image" node scripts/test-docker.mjs

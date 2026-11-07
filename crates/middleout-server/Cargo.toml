@@ -1,0 +1,40 @@
+[package]
+name = "middleout-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "middleout_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "middleout"
+path = "src/main.rs"
+
+[dependencies]
+middleout-storage = { path = "../middleout-storage" }
+middleout-s3 = { path = "../middleout-s3" }
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+base64.workspace = true
+percent-encoding.workspace = true
+bytes.workspace = true
+http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+http-body-util.workspace = true

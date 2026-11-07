@@ -1,26 +1,46 @@
-FROM node:22-bookworm-slim AS build
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build && npm prune --omit=dev
+# syntax=docker/dockerfile:1
+FROM rust:1-bookworm AS builder
 
-FROM node:22-bookworm-slim AS runtime
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=8080 DATA_DIR=/app/data
-WORKDIR /app
-COPY --from=build --chown=node:node /app/dist ./dist
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/migrations ./migrations
-COPY --from=build --chown=node:node /app/scripts ./scripts
-COPY --from=build --chown=node:node /app/package.json ./package.json
-RUN mkdir -p /app/data && chown node:node /app/data
-USER node
+WORKDIR /usr/src/middleout
+
+# Copy workspace manifests first for dependency caching
+COPY Cargo.toml Cargo.lock ./
+COPY crates/middleout-storage/Cargo.toml crates/middleout-storage/Cargo.toml
+COPY crates/middleout-s3/Cargo.toml crates/middleout-s3/Cargo.toml
+COPY crates/middleout-server/Cargo.toml crates/middleout-server/Cargo.toml
+
+# Copy full source tree and build release binary
+COPY crates ./crates
+RUN cargo build --release --locked --bin middleout
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user and data directory
+RUN groupadd --system --gid 10001 middleout \
+    && useradd --system --uid 10001 --gid middleout --home-dir /data --no-create-home middleout \
+    && mkdir -p /data \
+    && chown -R middleout:middleout /data
+
+COPY --from=builder /usr/src/middleout/target/release/middleout /usr/local/bin/middleout
+
+ENV HOST=0.0.0.0 \
+    PORT=8080 \
+    DATA_DIR=/data \
+    MIDDLEOUT_REGION=us-east-1 \
+    MAX_OBJECT_BYTES=1073741824
+
+VOLUME ["/data"]
 EXPOSE 8080
-VOLUME ["/app/data"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD node -e "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "scripts/start.mjs"]
 
-FROM runtime AS validation
-COPY --from=build --chown=node:node /app/src ./src
+USER middleout
+WORKDIR /data
 
-FROM runtime AS production
+HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/middleout"]
