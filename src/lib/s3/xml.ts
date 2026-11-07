@@ -63,6 +63,9 @@ export function listObjectsXml(opts: {
   prefixes: string[];
   truncated: boolean;
   next: string | null;
+  continuationToken?: string | null;
+  startAfter?: string | null;
+  marker?: string | null;
 }): string {
   const contents = opts.contents
     .map(
@@ -78,21 +81,41 @@ export function listObjectsXml(opts: {
   const prefixes = opts.prefixes
     .map((p) => `  <CommonPrefixes><Prefix>${xmlEscape(p)}</Prefix></CommonPrefixes>`)
     .join("\n");
-  const token =
-    opts.truncated && opts.next
-      ? opts.v2
-        ? `<NextContinuationToken>${xmlEscape(opts.next)}</NextContinuationToken>`
-        : `<NextMarker>${xmlEscape(opts.next)}</NextMarker>`
+
+  if (opts.v2) {
+    const continuationToken = opts.continuationToken
+      ? `  <ContinuationToken>${xmlEscape(opts.continuationToken)}</ContinuationToken>\n`
       : "";
+    const nextContinuationToken =
+      opts.truncated && opts.next
+        ? `  <NextContinuationToken>${xmlEscape(opts.next)}</NextContinuationToken>\n`
+        : "";
+    const startAfter = opts.startAfter
+      ? `  <StartAfter>${xmlEscape(opts.startAfter)}</StartAfter>\n`
+      : "";
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>${xmlEscape(opts.bucket)}</Name>
+  <Prefix>${xmlEscape(opts.prefix)}</Prefix>
+${startAfter}${continuationToken}${nextContinuationToken}  <KeyCount>${opts.contents.length + opts.prefixes.length}</KeyCount>
+  <MaxKeys>${opts.maxKeys}</MaxKeys>
+  <Delimiter>${xmlEscape(opts.delimiter)}</Delimiter>
+  <IsTruncated>${opts.truncated}</IsTruncated>
+${contents}
+${prefixes}
+</ListBucketResult>`;
+  }
+
+  const marker = `  <Marker>${xmlEscape(opts.marker ?? "")}</Marker>\n`;
+  const nextMarker =
+    opts.truncated && opts.next ? `  <NextMarker>${xmlEscape(opts.next)}</NextMarker>\n` : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>${xmlEscape(opts.bucket)}</Name>
   <Prefix>${xmlEscape(opts.prefix)}</Prefix>
+${marker}${nextMarker}  <MaxKeys>${opts.maxKeys}</MaxKeys>
   <Delimiter>${xmlEscape(opts.delimiter)}</Delimiter>
-  <MaxKeys>${opts.maxKeys}</MaxKeys>
-  ${opts.v2 ? `<KeyCount>${opts.contents.length + opts.prefixes.length}</KeyCount>` : ""}
   <IsTruncated>${opts.truncated}</IsTruncated>
-  ${token}
 ${contents}
 ${prefixes}
 </ListBucketResult>`;

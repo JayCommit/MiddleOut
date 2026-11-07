@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { LifecycleError } from "../storage/lifecycle.ts";
 import {
   getLifecycle,
@@ -152,6 +153,30 @@ function metaHeaders(request: Request, bytes: Buffer | null): Record<string, str
     extra["content-encoding"] = encoding;
   }
   return extra;
+}
+
+function verifyContentMd5(request: Request, body: Buffer): Response | null {
+  const contentMd5 = request.headers.get("content-md5");
+  if (contentMd5 === null) return null;
+  const trimmed = contentMd5.trim();
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(trimmed, "base64");
+  } catch {
+    return xmlError(400, "InvalidDigest", "The Content-MD5 you specified is not valid.");
+  }
+  if (decoded.length !== 16 || decoded.toString("base64") !== trimmed) {
+    return xmlError(400, "InvalidDigest", "The Content-MD5 you specified is not valid.");
+  }
+  const actual = createHash("md5").update(body).digest();
+  if (!timingSafeEqual(decoded, actual)) {
+    return xmlError(
+      400,
+      "BadDigest",
+      "The Content-MD5 you specified did not match what we received.",
+    );
+  }
+  return null;
 }
 
 export async function handleS3(request: Request, now = Date.now()): Promise<Response> {
@@ -626,8 +651,9 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
         ),
       );
     }
+    const isV2 = url.searchParams.get("list-type") === "2";
     const xml = listObjectsXml({
-      v2: url.searchParams.get("list-type") === "2",
+      v2: isV2,
       bucket,
       prefix,
       delimiter,
@@ -636,6 +662,9 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
       prefixes: listed.prefixes,
       truncated: listed.truncated,
       next: listed.nextStart,
+      continuationToken: url.searchParams.get("continuation-token"),
+      startAfter: url.searchParams.get("start-after"),
+      marker: url.searchParams.get("marker"),
     });
     return withCors(xmlResponse(200, method === "HEAD" ? "" : xml));
   }
@@ -715,6 +744,8 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     url.searchParams.has("partNumber")
   ) {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
+    const md5Error = verifyContentMd5(request, body);
+    if (md5Error) return withCors(md5Error);
     const uploadId = url.searchParams.get("uploadId") ?? "";
     const partNum = parseInt(url.searchParams.get("partNumber") ?? "0", 10);
     const res = await uploadMultipartPart(ownerId, bucket, key, uploadId, partNum, body);
@@ -812,6 +843,8 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
   // Put Object
   if (key && method === "PUT") {
     if (!ownerId) return withCors(xmlError(403, "AccessDenied", "Access denied."));
+    const md5Error = verifyContentMd5(request, body);
+    if (md5Error) return withCors(md5Error);
     const type = request.headers.get("content-type") || "application/octet-stream";
     const cannedAcl = request.headers.get("x-amz-acl") || "private";
     const written = await putBytes(

@@ -435,3 +435,164 @@ test("S3 endpoint: Bucket and Object ACL support and anonymous access", async ()
   const anonGetRes2 = await handleS3(anonGetReq2);
   assert.equal(anonGetRes2.status, 403);
 });
+
+test("S3 endpoint: Content-MD5 verification on PutObject and UploadPart", async () => {
+  const { createHash } = await import("node:crypto");
+  const ownerId = `md5-user-${Date.now()}`;
+  await createBucket(ownerId, "md5-test-bucket", false);
+  const keyRes = await createKey(ownerId, "Md5Key", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+  const content = "Hello MiddleOut Content-MD5 verification!";
+  const validMd5 = createHash("md5").update(content).digest("base64");
+  const wrongMd5 = createHash("md5").update("other content").digest("base64");
+
+  // 1. PutObject with valid Content-MD5 succeeds
+  const goodPut = await handleS3(
+    new Request("http://localhost:8080/api/s3/md5-test-bucket/good.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "content-md5": validMd5,
+        "content-type": "text/plain",
+      },
+      body: content,
+    }),
+  );
+  assert.equal(goodPut.status, 200);
+
+  // 2. PutObject with mismatched Content-MD5 returns 400 BadDigest
+  const badPut = await handleS3(
+    new Request("http://localhost:8080/api/s3/md5-test-bucket/bad.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "content-md5": wrongMd5,
+        "content-type": "text/plain",
+      },
+      body: content,
+    }),
+  );
+  assert.equal(badPut.status, 400);
+  const badPutXml = await badPut.text();
+  assert.match(badPutXml, /BadDigest/);
+
+  // 3. PutObject with malformed Content-MD5 returns 400 InvalidDigest
+  const malformedPut = await handleS3(
+    new Request("http://localhost:8080/api/s3/md5-test-bucket/malformed.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "content-md5": "not-valid-base64!?",
+        "content-type": "text/plain",
+      },
+      body: content,
+    }),
+  );
+  assert.equal(malformedPut.status, 400);
+  const malformedPutXml = await malformedPut.text();
+  assert.match(malformedPutXml, /InvalidDigest/);
+
+  // 4. UploadPart with valid and invalid Content-MD5
+  const initRes = await handleS3(
+    new Request("http://localhost:8080/api/s3/md5-test-bucket/mp.bin?uploads", {
+      method: "POST",
+      headers: { authorization: authHeader },
+    }),
+  );
+  assert.equal(initRes.status, 200);
+  const uploadIdMatch = /<UploadId>(.*?)<\/UploadId>/.exec(await initRes.text());
+  assert.ok(uploadIdMatch?.[1]);
+  const uploadId = uploadIdMatch[1];
+
+  const partContent = "multipart part 1 content";
+  const validPartMd5 = createHash("md5").update(partContent).digest("base64");
+
+  const badPart = await handleS3(
+    new Request(
+      `http://localhost:8080/api/s3/md5-test-bucket/mp.bin?uploadId=${uploadId}&partNumber=1`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: authHeader,
+          "content-md5": wrongMd5,
+        },
+        body: partContent,
+      },
+    ),
+  );
+  assert.equal(badPart.status, 400);
+  assert.match(await badPart.text(), /BadDigest/);
+
+  const goodPart = await handleS3(
+    new Request(
+      `http://localhost:8080/api/s3/md5-test-bucket/mp.bin?uploadId=${uploadId}&partNumber=1`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: authHeader,
+          "content-md5": validPartMd5,
+        },
+        body: partContent,
+      },
+    ),
+  );
+  assert.equal(goodPart.status, 200);
+});
+
+test("S3 endpoint: ListObjects and ListObjectsV2 echo pagination markers and continuation tokens", async () => {
+  const ownerId = `list-user-${Date.now()}`;
+  await createBucket(ownerId, "list-echo-bucket", false);
+  const keyRes = await createKey(ownerId, "ListKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+  for (const name of ["item1.txt", "item2.txt", "item3.txt"]) {
+    await putBytes(ownerId, "list-echo-bucket", name, Buffer.from("data"), "text/plain", {});
+  }
+
+  // 1. ListObjectsV2 with start-after
+  const listV2StartAfter = await handleS3(
+    new Request(
+      "http://localhost:8080/api/s3/list-echo-bucket?list-type=2&start-after=item1.txt&max-keys=1",
+      {
+        method: "GET",
+        headers: { authorization: authHeader },
+      },
+    ),
+  );
+  assert.equal(listV2StartAfter.status, 200);
+  const v2StartAfterXml = await listV2StartAfter.text();
+  assert.match(v2StartAfterXml, /<StartAfter>item1\.txt<\/StartAfter>/);
+  assert.match(v2StartAfterXml, /<NextContinuationToken>item2\.txt<\/NextContinuationToken>/);
+
+  // 2. ListObjectsV2 with continuation-token
+  const listV2Res = await handleS3(
+    new Request(
+      "http://localhost:8080/api/s3/list-echo-bucket?list-type=2&continuation-token=item1.txt&max-keys=1",
+      {
+        method: "GET",
+        headers: { authorization: authHeader },
+      },
+    ),
+  );
+  assert.equal(listV2Res.status, 200);
+  const v2Xml = await listV2Res.text();
+  assert.match(v2Xml, /<ContinuationToken>item1\.txt<\/ContinuationToken>/);
+  assert.match(v2Xml, /<NextContinuationToken>item2\.txt<\/NextContinuationToken>/);
+
+  // 3. ListObjects (V1) with marker
+  const listV1Res = await handleS3(
+    new Request("http://localhost:8080/api/s3/list-echo-bucket?marker=item1.txt&max-keys=1", {
+      method: "GET",
+      headers: { authorization: authHeader },
+    }),
+  );
+  assert.equal(listV1Res.status, 200);
+  const v1Xml = await listV1Res.text();
+  assert.match(v1Xml, /<Marker>item1\.txt<\/Marker>/);
+  assert.match(v1Xml, /<NextMarker>item2\.txt<\/NextMarker>/);
+});

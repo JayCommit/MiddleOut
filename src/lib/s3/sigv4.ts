@@ -167,14 +167,21 @@ export function parseAuthorization(request: Request): ParsedAuth | { error: stri
     if (hasDuplicatePresigned) {
       return { error: "Presigned URL contains duplicate authentication parameters." };
     }
-    if ((url.searchParams.get("X-Amz-Algorithm") ?? "").toUpperCase() !== "AWS4-HMAC-SHA256") {
+    const getCI = (name: string) => {
+      const lower = name.toLowerCase();
+      for (const [k, v] of url.searchParams.entries()) {
+        if (k.toLowerCase() === lower) return v;
+      }
+      return null;
+    };
+    if ((getCI("x-amz-algorithm") ?? "").toUpperCase() !== "AWS4-HMAC-SHA256") {
       return { error: "Presigned URL is malformed." };
     }
-    const cred = url.searchParams.get("X-Amz-Credential") ?? "";
-    const signed = url.searchParams.get("X-Amz-SignedHeaders") ?? "";
-    const sig = url.searchParams.get("X-Amz-Signature") ?? "";
-    const amzDate = url.searchParams.get("X-Amz-Date") ?? "";
-    const rawExpires = url.searchParams.get("X-Amz-Expires") ?? "";
+    const cred = getCI("x-amz-credential") ?? "";
+    const signed = getCI("x-amz-signedheaders") ?? "";
+    const sig = getCI("x-amz-signature") ?? "";
+    const amzDate = getCI("x-amz-date") ?? "";
+    const rawExpires = getCI("x-amz-expires") ?? "";
     if (!/^\d+$/.test(rawExpires)) {
       return { error: "Presigned URL is malformed." };
     }

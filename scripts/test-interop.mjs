@@ -60,7 +60,16 @@ try {
     await new Promise((done) => setTimeout(done, 250));
   }
   assert.ok(healthy, logs);
-  const python = process.env.PYTHON || "python";
+  let python = process.env.PYTHON;
+  if (!python) {
+    const { execSync } = await import("node:child_process");
+    try {
+      execSync("python3 --version", { stdio: "ignore" });
+      python = "python3";
+    } catch {
+      python = "python";
+    }
+  }
   const client = spawn(python, ["scripts/interop.py"], {
     env: {
       ...env,
