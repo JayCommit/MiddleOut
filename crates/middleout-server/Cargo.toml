@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "middleout_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "middleout"
 path = "src/main.rs"
@@ -33,3 +37,4 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+http-body-util.workspace = true

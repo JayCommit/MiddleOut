@@ -1,0 +1,22 @@
+services:
+  middleout:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: middleout
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      DATA_DIR: "/data"
+      MIDDLEOUT_ACCESS_KEY_ID: "${MIDDLEOUT_ACCESS_KEY_ID:-middleout}"
+      MIDDLEOUT_SECRET_ACCESS_KEY: "${MIDDLEOUT_SECRET_ACCESS_KEY:-middleout-secret-key}"
+      MIDDLEOUT_REGION: "${MIDDLEOUT_REGION:-us-east-1}"
+      MAX_OBJECT_BYTES: "${MAX_OBJECT_BYTES:-1073741824}"
+    volumes:
+      - middleout-data:/data
+
+volumes:
+  middleout-data:
