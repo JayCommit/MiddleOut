@@ -596,3 +596,245 @@ test("S3 endpoint: ListObjects and ListObjectsV2 echo pagination markers and con
   assert.match(v1Xml, /<Marker>item1\.txt<\/Marker>/);
   assert.match(v1Xml, /<NextMarker>item2\.txt<\/NextMarker>/);
 });
+
+test("S3 endpoint: CopyObject honors x-amz-metadata-directive, x-amz-acl and self-copy", async () => {
+  const ownerId = `copy-user-${Date.now()}`;
+  await createBucket(ownerId, "copy-src-bucket", false);
+  await createBucket(ownerId, "copy-dst-bucket", false);
+  const keyRes = await createKey(ownerId, "CopyKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // Upload source object with custom metadata
+  const putRes = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-src-bucket/original.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "content-type": "text/plain",
+        "x-amz-meta-author": "alice",
+        "x-amz-meta-project": "middleout",
+      },
+      body: "Hello CopyObject",
+    }),
+  );
+  assert.equal(putRes.status, 200);
+
+  // 1. Invalid metadata directive returns 400 InvalidArgument
+  const badDirective = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-bad.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "x-amz-copy-source": "/copy-src-bucket/original.txt",
+        "x-amz-metadata-directive": "INVALID",
+      },
+    }),
+  );
+  assert.equal(badDirective.status, 400);
+  assert.match(await badDirective.text(), /InvalidArgument/);
+
+  // 2. Default COPY directive preserves metadata and content-type
+  const copyDefault = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-default.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "x-amz-copy-source": "/copy-src-bucket/original.txt",
+      },
+    }),
+  );
+  assert.equal(copyDefault.status, 200);
+  assert.match(await copyDefault.text(), /<CopyObjectResult/);
+
+  const headDefault = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-default.txt", {
+      method: "HEAD",
+      headers: { authorization: authHeader },
+    }),
+  );
+  assert.equal(headDefault.status, 200);
+  assert.equal(headDefault.headers.get("content-type"), "text/plain");
+  assert.equal(headDefault.headers.get("x-amz-meta-author"), "alice");
+  assert.equal(headDefault.headers.get("x-amz-meta-project"), "middleout");
+
+  // 3. REPLACE directive replaces metadata and content-type
+  const copyReplace = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-replace.json", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "x-amz-copy-source": "/copy-src-bucket/original.txt",
+        "x-amz-metadata-directive": "REPLACE",
+        "content-type": "application/json",
+        "x-amz-meta-author": "bob",
+      },
+    }),
+  );
+  assert.equal(copyReplace.status, 200);
+
+  const headReplace = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-replace.json", {
+      method: "HEAD",
+      headers: { authorization: authHeader },
+    }),
+  );
+  assert.equal(headReplace.status, 200);
+  assert.equal(headReplace.headers.get("content-type"), "application/json");
+  assert.equal(headReplace.headers.get("x-amz-meta-author"), "bob");
+  assert.equal(headReplace.headers.get("x-amz-meta-project"), null);
+
+  // 4. x-amz-acl header sets public-read on copied object
+  const copyPublic = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-public.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "x-amz-copy-source": "/copy-src-bucket/original.txt",
+        "x-amz-acl": "public-read",
+      },
+    }),
+  );
+  assert.equal(copyPublic.status, 200);
+
+  // Anonymous request to public copy should succeed
+  const anonGet = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-public.txt", {
+      method: "GET",
+    }),
+  );
+  assert.equal(anonGet.status, 200);
+  assert.equal(await anonGet.text(), "Hello CopyObject");
+
+  // Anonymous request to private default copy should be rejected with 403
+  const anonPrivate = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-dst-bucket/copy-default.txt", {
+      method: "GET",
+    }),
+  );
+  assert.equal(anonPrivate.status, 403);
+
+  // 5. Self-copy with COPY directive fails with 400 InvalidRequest
+  const selfCopyFail = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-src-bucket/original.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "x-amz-copy-source": "/copy-src-bucket/original.txt",
+      },
+    }),
+  );
+  assert.equal(selfCopyFail.status, 400);
+  assert.match(await selfCopyFail.text(), /InvalidRequest/);
+
+  // 6. Self-copy with REPLACE updates metadata in place
+  const selfCopyUpdate = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-src-bucket/original.txt", {
+      method: "PUT",
+      headers: {
+        authorization: authHeader,
+        "x-amz-copy-source": "/copy-src-bucket/original.txt",
+        "x-amz-metadata-directive": "REPLACE",
+        "content-type": "text/markdown",
+        "x-amz-meta-author": "charlie",
+      },
+    }),
+  );
+  assert.equal(selfCopyUpdate.status, 200);
+
+  const headSelf = await handleS3(
+    new Request("http://localhost:8080/api/s3/copy-src-bucket/original.txt", {
+      method: "HEAD",
+      headers: { authorization: authHeader },
+    }),
+  );
+  assert.equal(headSelf.status, 200);
+  assert.equal(headSelf.headers.get("content-type"), "text/markdown");
+  assert.equal(headSelf.headers.get("x-amz-meta-author"), "charlie");
+});
+
+test("S3 endpoint: completeMultipartUpload streams parts across chunk boundaries correctly", async () => {
+  const ownerId = `mp-stream-user-${Date.now()}`;
+  await createBucket(ownerId, "mp-stream-bucket", false);
+  const keyRes = await createKey(ownerId, "MpKey", "full");
+  assert.equal(keyRes.ok, true);
+  if (!keyRes.ok) return;
+
+  const authHeader = `MO ${keyRes.accessKeyId}:${keyRes.secretKey}`;
+
+  // Initiate multipart upload
+  const initRes = await handleS3(
+    new Request("http://localhost:8080/api/s3/mp-stream-bucket/large.bin?uploads", {
+      method: "POST",
+      headers: { authorization: authHeader },
+    }),
+  );
+  assert.equal(initRes.status, 200);
+  const initXml = await initRes.text();
+  const uploadIdMatch = initXml.match(/<UploadId>(.+?)<\/UploadId>/);
+  assert.ok(uploadIdMatch);
+  const uploadId = uploadIdMatch[1];
+
+  // Upload 2 parts of 200KB each (CHUNK_BYTES is 192KB = 196608 bytes)
+  // This verifies that chunking slices across part boundaries properly
+  const part1Data = Buffer.alloc(200 * 1024, 0x41); // 200KB 'A'
+  const part2Data = Buffer.alloc(200 * 1024, 0x42); // 200KB 'B'
+
+  const p1Res = await handleS3(
+    new Request(
+      `http://localhost:8080/api/s3/mp-stream-bucket/large.bin?uploadId=${uploadId}&partNumber=1`,
+      {
+        method: "PUT",
+        headers: { authorization: authHeader },
+        body: part1Data,
+      },
+    ),
+  );
+  assert.equal(p1Res.status, 200);
+  const etag1 = p1Res.headers.get("etag")!;
+  assert.ok(etag1);
+
+  const p2Res = await handleS3(
+    new Request(
+      `http://localhost:8080/api/s3/mp-stream-bucket/large.bin?uploadId=${uploadId}&partNumber=2`,
+      {
+        method: "PUT",
+        headers: { authorization: authHeader },
+        body: part2Data,
+      },
+    ),
+  );
+  assert.equal(p2Res.status, 200);
+  const etag2 = p2Res.headers.get("etag")!;
+  assert.ok(etag2);
+
+  // Complete multipart upload
+  const completeBody = `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>${etag1}</ETag></Part><Part><PartNumber>2</PartNumber><ETag>${etag2}</ETag></Part></CompleteMultipartUpload>`;
+  const compRes = await handleS3(
+    new Request(`http://localhost:8080/api/s3/mp-stream-bucket/large.bin?uploadId=${uploadId}`, {
+      method: "POST",
+      headers: { authorization: authHeader },
+      body: completeBody,
+    }),
+  );
+  assert.equal(compRes.status, 200);
+  const compXml = await compRes.text();
+  assert.match(compXml, /<CompleteMultipartUploadResult/);
+  assert.match(compXml, /-2"?<\/ETag>/);
+
+  // Verify object content and size
+  const getRes = await handleS3(
+    new Request("http://localhost:8080/api/s3/mp-stream-bucket/large.bin", {
+      method: "GET",
+      headers: { authorization: authHeader },
+    }),
+  );
+  assert.equal(getRes.status, 200);
+  assert.equal(getRes.headers.get("content-length"), "409600");
+  const bytes = Buffer.from(await getRes.arrayBuffer());
+  assert.equal(bytes.length, 400 * 1024);
+  assert.deepEqual(bytes.subarray(0, 200 * 1024), part1Data);
+  assert.deepEqual(bytes.subarray(200 * 1024), part2Data);
+});
