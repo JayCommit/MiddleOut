@@ -884,9 +884,10 @@ impl StorageEngine {
 
         let src_full_path = self.data_dir.join(&src_blob_rel_path);
         if let Err(e) = (|| -> StorageResult<()> {
-            fs::copy(&src_full_path, &staging_path)?;
-            let f = File::open(&staging_path)?;
-            f.sync_all()?;
+            let mut src_file = File::open(&src_full_path)?;
+            let mut dst_file = File::create(&staging_path)?;
+            std::io::copy(&mut src_file, &mut dst_file)?;
+            dst_file.sync_all()?;
             Ok(())
         })() {
             let _ = fs::remove_file(&staging_path);
