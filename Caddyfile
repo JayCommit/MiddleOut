@@ -1,6 +1,0 @@
-{$MIDDLEOUT_DOMAIN} {
-  header Strict-Transport-Security "max-age=31536000"
-  @metrics path /api/metrics /api/metrics/*
-  respond @metrics 403
-  reverse_proxy middleout:8080
-}
