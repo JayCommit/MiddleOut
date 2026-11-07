@@ -1761,21 +1761,175 @@ export async function copyObject(
   sourceKey: string,
   destBucket: string,
   destKey: string,
+  options?: {
+    metadataDirective?: "COPY" | "REPLACE";
+    contentType?: string;
+    headers?: Record<string, string>;
+    acl?: string;
+  },
 ) {
-  const found = await readObjectFor(ownerId, sourceBucket, sourceKey);
-  if ("error" in found) return { ok: false as const, error: found.error, code: found.error };
-  if (!("object" in found) || !found.object)
-    return { ok: false as const, error: "NoSuchKey", code: "NoSuchKey" };
-  const written = await putBytes(
-    ownerId,
-    destBucket,
-    destKey,
-    found.object.bytes,
-    found.object.contentType,
-    found.object.headers,
-  );
-  if (!written.ok) return written;
-  return { ok: true as const, etag: written.etag, updatedAt: new Date().toISOString() };
+  const keyError = validateKey(destKey);
+  if (keyError) return { ok: false as const, error: keyError, code: "InvalidArgument" };
+  const safeAcl = options?.acl === "public-read" ? "public-read" : "private";
+
+  const sql = await getSql();
+  const sBuckets = await sql<{
+    id: string;
+    owner_id: string;
+    is_public: unknown;
+    policy: string | null;
+    provider?: string;
+    provider_config?: string;
+  }>`
+    select id, owner_id, is_public, policy, provider, provider_config
+    from mo_buckets where name = ${sourceBucket}
+  `;
+  const sBucket = sBuckets[0];
+  if (!sBucket) return { ok: false as const, error: "NoSuchBucket", code: "NoSuchBucket" };
+  if (sBucket.policy !== null) return { ok: false as const, error: "AccessDenied", code: "AccessDenied" };
+  const ownsSource = sBucket.owner_id === ownerId;
+  const isSourcePublic = asBool(sBucket.is_public);
+
+  const dBucket = await ownedBucket(sql, ownerId, destBucket);
+  if (!dBucket) return { ok: false as const, error: "NoSuchBucket", code: "NoSuchBucket" };
+  const denied = driveWriteError(dBucket);
+  if (denied) return denied;
+
+  // Fall back to reading full bytes if either bucket is backed by Google Drive
+  if (sBucket.provider === "gdrive" || dBucket.provider === "gdrive") {
+    const found = await readObjectFor(ownerId, sourceBucket, sourceKey);
+    if ("error" in found) return { ok: false as const, error: found.error, code: found.error };
+    if (!("object" in found) || !found.object)
+      return { ok: false as const, error: "NoSuchKey", code: "NoSuchKey" };
+
+    const finalContentType =
+      options?.metadataDirective === "REPLACE"
+        ? (options?.contentType || "application/octet-stream")
+        : found.object.contentType;
+    const finalHeaders =
+      options?.metadataDirective === "REPLACE"
+        ? sanitizeHeaders(options?.headers || {})
+        : found.object.headers;
+    const finalAcl = options?.acl ? safeAcl : (found.object.acl || "private");
+
+    const written = await putBytes(
+      ownerId,
+      destBucket,
+      destKey,
+      found.object.bytes,
+      finalContentType,
+      finalHeaders,
+      finalAcl,
+    );
+    if (!written.ok) return written;
+    return { ok: true as const, etag: written.etag, updatedAt: new Date().toISOString() };
+  }
+
+  // Local storage: fetch only object metadata (zero payload buffering)
+  const sourceRows = await sql<{
+    id: string;
+    size: unknown;
+    content_type: string;
+    etag: string;
+    headers: string;
+    acl: string;
+  }>`
+    select id, size, content_type, etag, headers, coalesce(acl, 'private') as acl
+    from mo_objects
+    where bucket_id = ${sBucket.id} and key = ${sourceKey} and complete = true
+  `;
+  const sourceObj = sourceRows[0];
+  if (!sourceObj) return { ok: false as const, error: "NoSuchKey", code: "NoSuchKey" };
+
+  const sourceIsPublic = sourceObj.acl === "public-read";
+  if (!ownsSource && !isSourcePublic && !sourceIsPublic) {
+    return { ok: false as const, error: "AccessDenied", code: "AccessDenied" };
+  }
+
+  const sourceSize = asNum(sourceObj.size);
+  const { maxObject, quota } = await getActiveLimits(sql);
+  if (sourceSize > maxObject) {
+    return {
+      ok: false as const,
+      error: `Object size exceeds maximum limit of ${formatBytes(maxObject)}.`,
+      code: "EntityTooLarge",
+    };
+  }
+
+  const finalContentType =
+    options?.metadataDirective === "REPLACE"
+      ? (options?.contentType || "application/octet-stream")
+      : sourceObj.content_type;
+  const finalHeaders =
+    options?.metadataDirective === "REPLACE"
+      ? sanitizeHeaders(options?.headers || {})
+      : parseHeaders(sourceObj.headers);
+  const finalAcl = options?.acl
+    ? safeAcl
+    : (sBucket.id === dBucket.id && sourceKey === destKey ? sourceObj.acl : "private");
+
+  return sql.transaction(async (tx) => {
+    await lockAccountForQuota(tx, ownerId);
+
+    // Self-copy: copying an object onto itself
+    if (sBucket.id === dBucket.id && sourceKey === destKey) {
+      if (options?.metadataDirective !== "REPLACE" && !options?.acl) {
+        return {
+          ok: false as const,
+          error: "This copy request is illegal because it is trying to copy an object to itself without changing the object's metadata.",
+          code: "InvalidRequest",
+        };
+      }
+      // Update metadata and ACL in place without copying parts
+      await tx`
+        update mo_objects
+        set content_type = ${finalContentType},
+            headers = ${JSON.stringify(finalHeaders)},
+            acl = ${finalAcl},
+            updated_at = now()
+        where id = ${sourceObj.id}
+      `;
+      await audit(tx, ownerId, "object.put", `${destBucket}/${destKey} (metadata update)`);
+      return { ok: true as const, etag: sourceObj.etag, updatedAt: new Date().toISOString() };
+    }
+
+    // Check account quota for destination
+    const existingDest = await tx<{ id: string; size: unknown }>`
+      select id, size from mo_objects
+      where bucket_id = ${dBucket.id} and key = ${destKey} and complete = true
+    `;
+    const existingSize = asNum(existingDest[0]?.size);
+    const used = await accountBytes(tx, ownerId);
+    if (used - existingSize + sourceSize > quota) {
+      return {
+        ok: false as const,
+        error: `Account storage limit reached (${formatBytes(quota)}).`,
+        code: "QuotaExceeded",
+      };
+    }
+
+    const newObjectId = randomUUID();
+    await tx`
+      insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers, acl)
+      values (${newObjectId}, ${dBucket.id}, ${destKey}, ${sourceSize}, ${finalContentType}, ${sourceObj.etag}, ${true}, ${JSON.stringify(finalHeaders)}, ${finalAcl})
+    `;
+
+    // Clone parts directly in SQL without buffering anything in Node memory
+    await tx`
+      insert into mo_parts (object_id, part, data)
+      select ${newObjectId}, part, data
+      from mo_parts
+      where object_id = ${sourceObj.id}
+    `;
+
+    // Delete previous destination object if any
+    if (existingDest[0]) {
+      await tx`delete from mo_objects where id = ${existingDest[0].id}`;
+    }
+
+    await audit(tx, ownerId, "object.put", `${destBucket}/${destKey} (copy)`);
+    return { ok: true as const, etag: sourceObj.etag, updatedAt: new Date().toISOString() };
+  });
 }
 
 // Multipart Uploads
@@ -1871,20 +2025,23 @@ export async function completeMultipartUpload(
   uploadId: string,
   expectedParts: { partNumber: number; etag: string }[],
 ) {
-  return (await getSql()).transaction(async (sql) => {
-    await lockAccountForQuota(sql, ownerId);
-    const rows = await sql<{
+  const sql = await getSql();
+
+  // Validate metadata, calculate ETag and check limits in a short transaction that releases the account lock immediately
+  const prepareResult = await sql.transaction(async (tx) => {
+    await lockAccountForQuota(tx, ownerId);
+    const rows = await tx<{
       id: string;
       bucket_id: string;
       key: string;
       content_type: string;
       headers: string;
     }>`
-    select u.id, u.bucket_id, u.key, u.content_type, u.headers
-    from mo_multipart_uploads u
-    join mo_buckets b on b.id = u.bucket_id
-    where u.id = ${uploadId} and b.name = ${bucketName} and u.owner_id = ${ownerId} and u.key = ${key}
-  `;
+      select u.id, u.bucket_id, u.key, u.content_type, u.headers
+      from mo_multipart_uploads u
+      join mo_buckets b on b.id = u.bucket_id
+      where u.id = ${uploadId} and b.name = ${bucketName} and u.owner_id = ${ownerId} and u.key = ${key}
+    `;
     const upload = rows[0];
     if (!upload) return { ok: false as const, error: "Upload not found.", code: "NoSuchUpload" };
 
@@ -1894,24 +2051,23 @@ export async function completeMultipartUpload(
         error: "Multipart upload must contain between 1 and 10000 parts.",
         code: "InvalidPart",
       };
-    const storedParts = await sql<{
+
+    const storedParts = await tx<{
       part_number: unknown;
       size: unknown;
       etag: string;
-      data: string;
     }>`
-    select part_number, size, etag, data
-    from mo_multipart_parts
-    where upload_id = ${uploadId}
-    order by part_number
-  `;
-    const partMap = new Map<number, { size: number; etag: string; data: string }>();
+      select part_number, size, etag
+      from mo_multipart_parts
+      where upload_id = ${uploadId}
+      order by part_number
+    `;
+    const partMap = new Map<number, { size: number; etag: string }>();
     for (const p of storedParts) {
-      partMap.set(asNum(p.part_number), { size: asNum(p.size), etag: p.etag, data: p.data });
+      partMap.set(asNum(p.part_number), { size: asNum(p.size), etag: p.etag });
     }
 
     let lastPartNum = 0;
-    const buffers: Buffer[] = [];
     const md5s: Buffer[] = [];
     let totalSize = 0;
 
@@ -1940,13 +2096,11 @@ export async function completeMultipartUpload(
           code: "InvalidPart",
         };
       }
-      const buf = Buffer.from(stored.data, "base64");
-      buffers.push(buf);
-      md5s.push(createHash("md5").update(buf).digest());
-      totalSize += buf.length;
+      md5s.push(Buffer.from(stored.etag, "hex"));
+      totalSize += stored.size;
     }
 
-    const { maxObject } = await getActiveLimits(sql);
+    const { maxObject } = await getActiveLimits(tx);
     if (totalSize > maxObject) {
       return {
         ok: false as const,
@@ -1958,47 +2112,111 @@ export async function completeMultipartUpload(
     const combinedMd5 = createHash("md5").update(Buffer.concat(md5s)).digest("hex");
     const multipartEtag = `${combinedMd5}-${expectedParts.length}`;
 
-    const objectBytes = Buffer.concat(buffers);
-    const bucket = await ownedBucket(sql, ownerId, bucketName);
+    const bucket = await ownedBucket(tx, ownerId, bucketName);
     if (!bucket) return { ok: false as const, error: "Bucket not found.", code: "NoSuchBucket" };
     const denied = driveWriteError(bucket);
     if (denied) return denied;
-    if (bucket.provider === "gdrive") {
-      const config = driveConfig(bucket);
-      const result = await gdrivePutObject(
-        config.folderId,
-        key,
-        objectBytes,
-        upload.content_type,
-        ownerId,
-        config.mountMode,
-      );
-      if (!result.ok)
-        return {
-          ok: false as const,
-          error: result.error || "Google Drive upload failed.",
-          code: "InternalError",
-        };
-      await sql`delete from mo_multipart_uploads where id = ${uploadId}`;
-      await audit(sql, ownerId, "object.put", `${bucketName}/${key} (gdrive multipart)`);
-      return {
-        ok: true as const,
-        etag: result.etag || multipartEtag,
-        size: totalSize,
-        location: `/api/s3/${bucketName}/${key}`,
-      };
-    }
-    await sql`delete from mo_objects where bucket_id = ${upload.bucket_id} and key = ${upload.key} and complete = true`;
-    const objectId = randomUUID();
+
     const uploadHeaders = parseHeaders(upload.headers);
     const uploadAcl = uploadHeaders["x-amz-acl"] === "public-read" ? "public-read" : "private";
-    await sql`
-    insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers, acl)
-    values (${objectId}, ${upload.bucket_id}, ${upload.key}, ${totalSize}, ${upload.content_type}, ${multipartEtag}, ${true}, ${upload.headers}, ${uploadAcl})
-  `;
-    await insertBytes(sql, objectId, objectBytes);
+
+    return {
+      ok: true as const,
+      upload,
+      bucket,
+      totalSize,
+      multipartEtag,
+      uploadHeaders,
+      uploadAcl,
+    };
+  });
+
+  if (!prepareResult.ok) return prepareResult;
+  const { upload, bucket, totalSize, multipartEtag, uploadAcl } = prepareResult;
+
+  if (bucket.provider === "gdrive") {
+    const config = driveConfig(bucket);
+    const partBuffers: Buffer[] = [];
+    for (const ep of expectedParts) {
+      const partRow = await sql<{ data: string }>`
+        select data from mo_multipart_parts
+        where upload_id = ${uploadId} and part_number = ${ep.partNumber}
+      `;
+      if (!partRow[0]) {
+        return { ok: false as const, error: `Part ${ep.partNumber} is missing.`, code: "InvalidPart" };
+      }
+      partBuffers.push(Buffer.from(partRow[0].data, "base64"));
+    }
+    const objectBytes = Buffer.concat(partBuffers);
+    const result = await gdrivePutObject(
+      config.folderId,
+      key,
+      objectBytes,
+      upload.content_type,
+      ownerId,
+      config.mountMode,
+    );
+    if (!result.ok)
+      return {
+        ok: false as const,
+        error: result.error || "Google Drive upload failed.",
+        code: "InternalError",
+      };
     await sql`delete from mo_multipart_uploads where id = ${uploadId}`;
-    await audit(sql, ownerId, "object.put", `${bucketName}/${upload.key} (multipart)`);
+    await audit(sql, ownerId, "object.put", `${bucketName}/${key} (gdrive multipart)`);
+    return {
+      ok: true as const,
+      etag: result.etag || multipartEtag,
+      size: totalSize,
+      location: `/api/s3/${bucketName}/${key}`,
+    };
+  }
+
+  // Local storage: stage incomplete object in mo_objects so account lock is released during chunk streaming
+  const objectId = randomUUID();
+  await sql`
+    insert into mo_objects (id, bucket_id, key, size, content_type, etag, complete, headers, acl)
+    values (${objectId}, ${upload.bucket_id}, ${upload.key}, ${totalSize}, ${upload.content_type}, ${multipartEtag}, ${false}, ${upload.headers}, ${uploadAcl})
+  `;
+
+  try {
+    let currentPartIndex = 0;
+    let remainder = Buffer.alloc(0);
+
+    for (const ep of expectedParts) {
+      const partRows = await sql<{ data: string }>`
+        select data from mo_multipart_parts
+        where upload_id = ${uploadId} and part_number = ${ep.partNumber}
+      `;
+      const partRow = partRows[0];
+      if (!partRow) {
+        throw new Error(`Part ${ep.partNumber} is missing.`);
+      }
+      const partBuf = Buffer.from(partRow.data, "base64");
+      const combined = remainder.length > 0 ? Buffer.concat([remainder, partBuf]) : partBuf;
+
+      let offset = 0;
+      while (offset + CHUNK_BYTES <= combined.length) {
+        const slice = combined.subarray(offset, offset + CHUNK_BYTES);
+        await sql`insert into mo_parts (object_id, part, data) values (${objectId}, ${currentPartIndex}, ${slice.toString("base64")})`;
+        currentPartIndex += 1;
+        offset += CHUNK_BYTES;
+      }
+      remainder = Buffer.from(combined.subarray(offset));
+    }
+
+    if (remainder.length > 0) {
+      await sql`insert into mo_parts (object_id, part, data) values (${objectId}, ${currentPartIndex}, ${remainder.toString("base64")})`;
+      currentPartIndex += 1;
+    }
+
+    // Atomically commit staged object, replacing any prior completed object, and clean up upload
+    await sql.transaction(async (tx) => {
+      await tx`delete from mo_objects where bucket_id = ${upload.bucket_id} and key = ${upload.key} and complete = true`;
+      await tx`update mo_objects set complete = true, updated_at = now(), written_at = now() where id = ${objectId}`;
+      await tx`delete from mo_multipart_uploads where id = ${uploadId}`;
+      await audit(tx, ownerId, "object.put", `${bucketName}/${upload.key} (multipart)`);
+    });
 
     return {
       ok: true as const,
@@ -2006,7 +2224,10 @@ export async function completeMultipartUpload(
       size: totalSize,
       location: `/api/s3/${bucketName}/${upload.key}`,
     };
-  });
+  } catch (err) {
+    await sql`delete from mo_objects where id = ${objectId}`;
+    throw err;
+  }
 }
 
 export async function abortMultipartUpload(

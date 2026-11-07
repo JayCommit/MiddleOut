@@ -35,7 +35,6 @@ import {
   readObjectFor,
   removeObject,
   secretForAccessKey,
-  setBucketAccess,
   setBucketAcl,
   setBucketCors,
   setBucketPolicy,
@@ -819,22 +818,40 @@ export async function handleS3(request: Request, now = Date.now()): Promise<Resp
     if (keyBucketScope && decoded.slice(0, slash) !== keyBucketScope) {
       return withCors(xmlError(403, "AccessDenied", "Access key cannot read the source bucket."));
     }
+    const directiveHeader = request.headers.get("x-amz-metadata-directive");
+    let metadataDirective: "COPY" | "REPLACE" = "COPY";
+    if (directiveHeader) {
+      const upper = directiveHeader.toUpperCase();
+      if (upper !== "COPY" && upper !== "REPLACE") {
+        return withCors(xmlError(400, "InvalidArgument", "Unknown metadata directive."));
+      }
+      metadataDirective = upper;
+    }
+    const cannedAcl = request.headers.get("x-amz-acl") || undefined;
+    const contentType = request.headers.get("content-type") || undefined;
+    const headers = metaHeaders(request, null);
     const copied = await copyObject(
       ownerId,
       decoded.slice(0, slash),
       decoded.slice(slash + 1),
       bucket,
       key,
+      {
+        metadataDirective,
+        contentType,
+        headers,
+        acl: cannedAcl,
+      },
     );
     if (!copied.ok) {
       const code = copied.code ?? "AccessDenied";
-      return withCors(
-        xmlError(
-          code === "NoSuchBucket" || code === "NoSuchKey" ? 404 : 403,
-          code,
-          copied.error ?? "Request failed",
-        ),
-      );
+      const status =
+        code === "NoSuchBucket" || code === "NoSuchKey"
+          ? 404
+          : code === "InvalidRequest" || code === "InvalidArgument" || code === "EntityTooLarge" || code === "QuotaExceeded"
+            ? 400
+            : 403;
+      return withCors(xmlError(status, code, copied.error ?? "Request failed", `/${bucket}/${key}`));
     }
     const xml = `<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>${copied.updatedAt}</LastModified><ETag>"${copied.etag}"</ETag></CopyObjectResult>`;
     return withCors(xmlResponse(200, xml));
