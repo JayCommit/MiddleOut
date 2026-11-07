@@ -64,6 +64,19 @@ test("presigned query signature matches the AWS example", () => {
   assert.equal(result.ok, true);
 });
 
+test("presigned query parameters work with lowercase parameter names", async () => {
+  const { parseAuthorization } = await import("./sigv4.ts");
+  const url = new URL(
+    "https://examplebucket.s3.amazonaws.com/test.txt?x-amz-algorithm=AWS4-HMAC-SHA256&x-amz-credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&x-amz-date=20130524T000000Z&x-amz-expires=86400&x-amz-signedheaders=host&x-amz-signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404",
+  );
+  const request = new Request(url, { method: "GET", headers: { host: "examplebucket.s3.amazonaws.com" } });
+  const parsed = parseAuthorization(request);
+  assert.ok(parsed && !("error" in parsed));
+  assert.equal(parsed.accessKeyId, "AKIAIOSFODNN7EXAMPLE");
+  assert.equal(parsed.presigned, true);
+  assert.equal(parsed.expiresSec, 86400);
+});
+
 test("aws-chunked body decodes to the raw bytes", () => {
   const raw = Buffer.from("5;chunk-signature=abc\r\nhello\r\n0;chunk-signature=def\r\n\r\n");
   assert.equal(decodeAwsChunked(raw).toString(), "hello");

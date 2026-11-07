@@ -43,7 +43,7 @@ console.log(
 const server = serve({
   hostname: process.env.HOST,
   maxRequestBodySize: maxRequestBytes,
-  trustProxy: false,
+  trustProxy: process.env.TRUST_PROXY === "true",
   port: Number(process.env.PORT),
   middleware: [
     async (request, next) => {
