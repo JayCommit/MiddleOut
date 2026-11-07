@@ -1,10 +1,10 @@
-use crate::error::S3Error;
 use crate::S3Config;
+use crate::error::S3Error;
 use axum::http::{HeaderMap, Method, Uri};
 use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use hmac::{Hmac, Mac};
-use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -154,7 +154,9 @@ fn build_canonical_headers(
             if let Some(auth) = uri.authority() {
                 auth.as_str().to_string()
             } else {
-                return Err(S3Error::access_denied("Missing required Host header in SignedHeaders"));
+                return Err(S3Error::access_denied(
+                    "Missing required Host header in SignedHeaders",
+                ));
             }
         } else {
             return Err(S3Error::access_denied(format!(
@@ -362,8 +364,9 @@ fn verify_header_auth(
         build_canonical_headers(&signed_headers_list, headers, uri)?;
 
     // Determine HashedPayload
-    let hashed_payload = if let Some(content_sha) =
-        headers.get("x-amz-content-sha256").and_then(|v| v.to_str().ok())
+    let hashed_payload = if let Some(content_sha) = headers
+        .get("x-amz-content-sha256")
+        .and_then(|v| v.to_str().ok())
     {
         if content_sha == "UNSIGNED-PAYLOAD" || content_sha.starts_with("STREAMING-") {
             content_sha.to_string()
@@ -476,7 +479,9 @@ fn verify_presigned_auth(
     let signed_at = parse_amz_date(amz_date_str)?;
     let now = Utc::now();
     if signed_at > now + chrono::Duration::minutes(5) {
-        return Err(S3Error::access_denied("Request date is too far in the future"));
+        return Err(S3Error::access_denied(
+            "Request date is too far in the future",
+        ));
     }
     let expires_at = signed_at + chrono::Duration::seconds(expires_secs);
     if now > expires_at {
@@ -579,11 +584,7 @@ fn decode_aws_chunked_bytes(input: &[u8]) -> Result<Bytes, S3Error> {
         let header_line = std::str::from_utf8(&input[pos..pos + line_end])
             .map_err(|_| S3Error::invalid_request("Invalid UTF-8 in aws-chunked header"))?;
 
-        let size_hex = header_line
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
+        let size_hex = header_line.split(';').next().unwrap_or("").trim();
 
         let chunk_size = usize::from_str_radix(size_hex, 16)
             .map_err(|_| S3Error::invalid_request("Invalid hex chunk size in aws-chunked body"))?;
@@ -630,6 +631,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sign_header_request(
         method: &Method,
         uri: &Uri,
@@ -641,10 +643,7 @@ mod tests {
         region: &str,
     ) {
         let payload_hash = sha256_hex(body);
-        headers.insert(
-            "x-amz-date",
-            HeaderValue::from_str(amz_date).unwrap(),
-        );
+        headers.insert("x-amz-date", HeaderValue::from_str(amz_date).unwrap());
         headers.insert(
             "x-amz-content-sha256",
             HeaderValue::from_str(&payload_hash).unwrap(),
@@ -679,13 +678,8 @@ mod tests {
             scope,
             sha256_hex(canonical_req.as_bytes())
         );
-        let sig = compute_sigv4_signature(
-            &config.secret_access_key,
-            date_stamp,
-            region,
-            "s3",
-            &sts,
-        );
+        let sig =
+            compute_sigv4_signature(&config.secret_access_key, date_stamp, region, "s3", &sts);
         let auth_val = format!(
             "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
             config.access_key_id, scope, signed_headers, sig
@@ -705,8 +699,9 @@ mod tests {
     #[test]
     fn test_valid_header_sigv4_and_special_chars() {
         let cfg = test_config();
-        let uri: Uri =
-            "/my-bucket/folder/hello%20world+test.txt?list-type=2&prefix=folder%2F".parse().unwrap();
+        let uri: Uri = "/my-bucket/folder/hello%20world+test.txt?list-type=2&prefix=folder%2F"
+            .parse()
+            .unwrap();
         let mut headers = HeaderMap::new();
         let body = b"hello world payload";
         sign_header_request(
@@ -814,7 +809,10 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("localhost:9000"));
 
-        let cred = format!("{}/{}/us-east-1/s3/aws4_request", cfg.access_key_id, date_stamp);
+        let cred = format!(
+            "{}/{}/us-east-1/s3/aws4_request",
+            cfg.access_key_id, date_stamp
+        );
         let query_without_sig = format!(
             "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={}&X-Amz-Expires=300&X-Amz-SignedHeaders=host",
             s3_uri_encode(&cred, true),
@@ -835,7 +833,8 @@ mod tests {
             scope,
             sha256_hex(can_req.as_bytes())
         );
-        let sig = compute_sigv4_signature(&cfg.secret_access_key, &date_stamp, "us-east-1", "s3", &sts);
+        let sig =
+            compute_sigv4_signature(&cfg.secret_access_key, &date_stamp, "us-east-1", "s3", &sts);
 
         let full_uri: Uri = format!("{path}?{query_without_sig}&X-Amz-Signature={sig}")
             .parse()
@@ -854,7 +853,8 @@ mod tests {
             .replace("X-Amz-Expires=300", "X-Amz-Expires=600")
             .parse()
             .unwrap();
-        let err = verify_request_auth(&Method::GET, &tampered_uri, &headers, b"", &cfg).unwrap_err();
+        let err =
+            verify_request_auth(&Method::GET, &tampered_uri, &headers, b"", &cfg).unwrap_err();
         assert_eq!(err.code, "SignatureDoesNotMatch");
 
         // Expired presigned URL (signed 1 hour ago with 60s expiry)

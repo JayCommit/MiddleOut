@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use middleout_storage::{
     BucketInfo, CompletedPart, ListObjectsV2Output, MultipartUploadInfo, ObjectMeta, PartInfo,
 };
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 const XML_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
 const S3_NS: &str = "http://s3.amazonaws.com/doc/2006-03-01/";
@@ -172,13 +172,13 @@ pub fn render_list_objects_v1(
         "<Marker>{}</Marker>",
         encode_key_or_prefix(marker_str, encoding_type_url)
     ));
-    if let Some(nm) = next_marker.or(out.next_continuation_token.as_deref()) {
-        if out.is_truncated {
-            xml.push_str(&format!(
-                "<NextMarker>{}</NextMarker>",
-                encode_key_or_prefix(nm, encoding_type_url)
-            ));
-        }
+    if let Some(nm) = next_marker.or(out.next_continuation_token.as_deref())
+        && out.is_truncated
+    {
+        xml.push_str(&format!(
+            "<NextMarker>{}</NextMarker>",
+            encode_key_or_prefix(nm, encoding_type_url)
+        ));
     }
     xml.push_str(&format!("<MaxKeys>{}</MaxKeys>", out.max_keys));
     if let Some(ref delim) = out.delimiter {
@@ -353,7 +353,9 @@ pub fn parse_complete_multipart_upload(xml_bytes: &[u8]) -> Result<Vec<Completed
                     match tag.as_str() {
                         "PartNumber" => {
                             let num = text.trim().parse::<u32>().map_err(|_| {
-                                S3Error::malformed_xml("Invalid PartNumber in CompleteMultipartUpload")
+                                S3Error::malformed_xml(
+                                    "Invalid PartNumber in CompleteMultipartUpload",
+                                )
                             })?;
                             current_part_number = Some(num);
                         }
@@ -467,9 +469,9 @@ pub fn parse_delete_objects(xml_bytes: &[u8]) -> Result<(Vec<String>, bool), S3E
                 let name = local_tag_name(qname.as_ref());
                 match name {
                     b"Object" if in_object => {
-                        let key = current_key
-                            .take()
-                            .ok_or_else(|| S3Error::malformed_xml("Missing Key in Delete Object"))?;
+                        let key = current_key.take().ok_or_else(|| {
+                            S3Error::malformed_xml("Missing Key in Delete Object")
+                        })?;
                         keys.push(key);
                         in_object = false;
                         current_tag = None;
@@ -667,7 +669,11 @@ mod tests {
         assert!(copy_xml.contains("<ETag>\"final-etag-1\"</ETag>"));
 
         let loc_default = render_location_constraint("us-east-1");
-        assert!(loc_default.contains("<LocationConstraint xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>"));
+        assert!(
+            loc_default.contains(
+                "<LocationConstraint xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>"
+            )
+        );
         let loc_custom = render_location_constraint("eu-west-1");
         assert!(loc_custom.contains(">eu-west-1</LocationConstraint>"));
     }

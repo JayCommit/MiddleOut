@@ -56,7 +56,11 @@ impl S3Error {
     }
 
     pub fn content_sha256_mismatch(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, "XAmzContentSHA256Mismatch", message)
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "XAmzContentSHA256Mismatch",
+            message,
+        )
     }
 
     pub fn no_such_bucket(bucket: impl std::fmt::Display) -> Self {
@@ -102,7 +106,9 @@ impl From<StorageError> for S3Error {
             StorageError::BucketAlreadyExists(b) => S3Error::new(
                 StatusCode::CONFLICT,
                 "BucketAlreadyOwnedByYou",
-                format!("Your previous request to create the named bucket succeeded and you already own it: {b}"),
+                format!(
+                    "Your previous request to create the named bucket succeeded and you already own it: {b}"
+                ),
             ),
             StorageError::NoSuchBucket(b) => S3Error::new(
                 StatusCode::NOT_FOUND,
@@ -134,31 +140,17 @@ impl From<StorageError> for S3Error {
                 "NoSuchUpload",
                 format!("The specified multipart upload does not exist: {u}"),
             ),
-            StorageError::InvalidPart(m) => S3Error::new(
-                StatusCode::BAD_REQUEST,
-                "InvalidPart",
-                m,
-            ),
-            StorageError::InvalidPartOrder(m) => S3Error::new(
-                StatusCode::BAD_REQUEST,
-                "InvalidPartOrder",
-                m,
-            ),
-            StorageError::BadDigest(m) => S3Error::new(
-                StatusCode::BAD_REQUEST,
-                "BadDigest",
-                m,
-            ),
-            StorageError::InvalidRange(m) => S3Error::new(
-                StatusCode::RANGE_NOT_SATISFIABLE,
-                "InvalidRange",
-                m,
-            ),
-            StorageError::EntityTooLarge(m) => S3Error::new(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "EntityTooLarge",
-                m,
-            ),
+            StorageError::InvalidPart(m) => S3Error::new(StatusCode::BAD_REQUEST, "InvalidPart", m),
+            StorageError::InvalidPartOrder(m) => {
+                S3Error::new(StatusCode::BAD_REQUEST, "InvalidPartOrder", m)
+            }
+            StorageError::BadDigest(m) => S3Error::new(StatusCode::BAD_REQUEST, "BadDigest", m),
+            StorageError::InvalidRange(m) => {
+                S3Error::new(StatusCode::RANGE_NOT_SATISFIABLE, "InvalidRange", m)
+            }
+            StorageError::EntityTooLarge(m) => {
+                S3Error::new(StatusCode::PAYLOAD_TOO_LARGE, "EntityTooLarge", m)
+            }
             StorageError::Database(e) => S3Error::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "InternalError",
@@ -169,11 +161,9 @@ impl From<StorageError> for S3Error {
                 "InternalError",
                 e.to_string(),
             ),
-            StorageError::Internal(m) => S3Error::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "InternalError",
-                m,
-            ),
+            StorageError::Internal(m) => {
+                S3Error::new(StatusCode::INTERNAL_SERVER_ERROR, "InternalError", m)
+            }
         }
     }
 }

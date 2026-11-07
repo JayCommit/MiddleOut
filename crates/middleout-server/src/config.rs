@@ -48,11 +48,11 @@ impl AppConfig {
             .or_else(|| get_non_empty("AWS_SECRET_ACCESS_KEY"))
             .unwrap_or_else(|| "middleout-secret-key".to_string());
 
-        let admin_user = get_non_empty("MIDDLEOUT_ADMIN_USER")
-            .unwrap_or_else(|| access_key_id.clone());
+        let admin_user =
+            get_non_empty("MIDDLEOUT_ADMIN_USER").unwrap_or_else(|| access_key_id.clone());
 
-        let admin_password = get_non_empty("MIDDLEOUT_ADMIN_PASSWORD")
-            .unwrap_or_else(|| secret_access_key.clone());
+        let admin_password =
+            get_non_empty("MIDDLEOUT_ADMIN_PASSWORD").unwrap_or_else(|| secret_access_key.clone());
 
         let region = get_non_empty("MIDDLEOUT_REGION")
             .or_else(|| get_non_empty("AWS_DEFAULT_REGION"))
@@ -106,7 +106,10 @@ mod tests {
         map.insert("BIND_ADDRESS".to_string(), "127.0.0.1".to_string());
         map.insert("PORT".to_string(), "9000".to_string());
         map.insert("AWS_ACCESS_KEY_ID".to_string(), "aws-key".to_string());
-        map.insert("AWS_SECRET_ACCESS_KEY".to_string(), "aws-secret".to_string());
+        map.insert(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "aws-secret".to_string(),
+        );
         map.insert("AWS_DEFAULT_REGION".to_string(), "eu-west-1".to_string());
 
         let cfg = AppConfig::from_lookup(|k| map.get(k).cloned());
@@ -124,8 +127,14 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("AWS_ACCESS_KEY_ID".to_string(), "aws-key".to_string());
         map.insert("MIDDLEOUT_ACCESS_KEY_ID".to_string(), "mo-key".to_string());
-        map.insert("MIDDLEOUT_ADMIN_USER".to_string(), "custom-admin".to_string());
-        map.insert("MIDDLEOUT_ADMIN_PASSWORD".to_string(), "custom-pass".to_string());
+        map.insert(
+            "MIDDLEOUT_ADMIN_USER".to_string(),
+            "custom-admin".to_string(),
+        );
+        map.insert(
+            "MIDDLEOUT_ADMIN_PASSWORD".to_string(),
+            "custom-pass".to_string(),
+        );
 
         let cfg = AppConfig::from_lookup(|k| map.get(k).cloned());
         assert_eq!(cfg.access_key_id, "mo-key");

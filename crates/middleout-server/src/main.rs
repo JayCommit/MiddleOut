@@ -2,7 +2,7 @@ use middleout_server::{build_app, config::AppConfig};
 use middleout_storage::StorageEngine;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,7 +29,11 @@ async fn main() -> anyhow::Result<()> {
     let app = build_app(storage, config).layer(TraceLayer::new_for_http());
 
     let listener = TcpListener::bind(&bind_addr).await?;
-    tracing::info!("Listening on http://{} (Console: http://{}/_console)", bind_addr, bind_addr);
+    tracing::info!(
+        "Listening on http://{} (Console: http://{}/_console)",
+        bind_addr,
+        bind_addr
+    );
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

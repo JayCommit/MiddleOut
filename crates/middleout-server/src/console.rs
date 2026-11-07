@@ -2,15 +2,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::{
+    Form, Router,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
-    Form, Router,
 };
 use hmac::{Hmac, Mac};
-use middleout_storage::{BucketInfo, ListObjectsV2Input, ObjectMeta, PutObjectInput, StorageEngine, StorageError};
-use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
+use middleout_storage::{
+    BucketInfo, ListObjectsV2Input, ObjectMeta, PutObjectInput, StorageEngine, StorageError,
+};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use serde::Deserialize;
 use sha2::Sha256;
 
@@ -85,14 +87,20 @@ impl ConsoleState {
 }
 
 pub fn console_router(state: ConsoleState) -> Router {
-    let max_body = state.config.max_object_bytes.saturating_add(16 * 1024 * 1024);
+    let max_body = state
+        .config
+        .max_object_bytes
+        .saturating_add(16 * 1024 * 1024);
     Router::new()
         .route("/_console", get(dashboard_page))
         .route("/_console/", get(dashboard_page))
         .route("/_console/login", get(login_page).post(login_submit))
         .route("/_console/logout", post(logout_submit))
         .route("/_console/buckets", post(create_bucket_submit))
-        .route("/_console/buckets/{name}/delete", post(delete_bucket_submit))
+        .route(
+            "/_console/buckets/{name}/delete",
+            post(delete_bucket_submit),
+        )
         .route(
             "/_console/buckets/{name}/visibility",
             post(toggle_bucket_visibility_submit),
@@ -178,17 +186,16 @@ pub fn is_authenticated(headers: &HeaderMap, state: &ConsoleState) -> bool {
     let now_ts = chrono::Utc::now().timestamp();
     for part in cookie_header.split(';') {
         let part = part.trim();
-        if let Some((name, value)) = part.split_once('=') {
-            if name.trim() == SESSION_COOKIE_NAME {
-                if verify_session_token(
-                    &state.cookie_secret,
-                    &state.config.admin_user,
-                    value.trim(),
-                    now_ts,
-                ) {
-                    return true;
-                }
-            }
+        if let Some((name, value)) = part.split_once('=')
+            && name.trim() == SESSION_COOKIE_NAME
+            && verify_session_token(
+                &state.cookie_secret,
+                &state.config.admin_user,
+                value.trim(),
+                now_ts,
+            )
+        {
+            return true;
         }
     }
     false
@@ -579,10 +586,7 @@ async fn login_page(
     page_layout("Sign In", "", &body).into_response()
 }
 
-async fn login_submit(
-    State(state): State<ConsoleState>,
-    Form(form): Form<LoginForm>,
-) -> Response {
+async fn login_submit(State(state): State<ConsoleState>, Form(form): Form<LoginForm>) -> Response {
     let user_ok = constant_time_eq(
         form.username.trim().as_bytes(),
         state.config.admin_user.as_bytes(),
@@ -613,8 +617,7 @@ async fn login_submit(
 }
 
 async fn logout_submit() -> Response {
-    let clear_cookie =
-        format!("{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    let clear_cookie = format!("{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     let mut resp = Redirect::to("/_console/login?msg=Signed+out").into_response();
     *resp.status_mut() = StatusCode::SEE_OTHER;
     if let Ok(val) = header::HeaderValue::from_str(&clear_cookie) {
@@ -902,8 +905,12 @@ async fn bucket_browser_page(
         Ok(out) => out,
         Err(e) => {
             let body = render_flash(None, Some(&storage_err_message(&e)));
-            return page_layout(&format!("Bucket {name}"), &logout_nav(&state.config.admin_user), &body)
-                .into_response();
+            return page_layout(
+                &format!("Bucket {name}"),
+                &logout_nav(&state.config.admin_user),
+                &body,
+            )
+            .into_response();
         }
     };
 
@@ -911,7 +918,12 @@ async fn bucket_browser_page(
     let name_url = encode_segment(&bucket.name);
     let prefix_esc = html_escape(&prefix);
 
-    let breadcrumbs_html = render_breadcrumbs(&format!("/_console/buckets/{name_url}"), &bucket.name, &prefix, true);
+    let breadcrumbs_html = render_breadcrumbs(
+        &format!("/_console/buckets/{name_url}"),
+        &bucket.name,
+        &prefix,
+        true,
+    );
     let table_html = render_object_table(
         &bucket.name,
         &prefix,
@@ -928,7 +940,10 @@ async fn bucket_browser_page(
             ),
         )
     } else {
-        (r#"<span class="badge badge-private">Private</span>"#, String::new())
+        (
+            r#"<span class="badge badge-private">Private</span>"#,
+            String::new(),
+        )
     };
 
     let body = format!(
@@ -984,7 +999,12 @@ async fn bucket_browser_page(
     .into_response()
 }
 
-fn render_breadcrumbs(base_url: &str, bucket_name: &str, prefix: &str, include_root_console: bool) -> String {
+fn render_breadcrumbs(
+    base_url: &str,
+    bucket_name: &str,
+    prefix: &str,
+    include_root_console: bool,
+) -> String {
     let mut parts = Vec::new();
     if include_root_console {
         parts.push(r#"<a href="/_console">Buckets</a>"#.to_string());
@@ -1034,7 +1054,8 @@ fn render_object_table(
     };
 
     if common_prefixes.is_empty() && objects.is_empty() && prefix.is_empty() {
-        return r#"<p class="muted" style="margin:0.5rem 0;">This bucket is empty.</p>"#.to_string();
+        return r#"<p class="muted" style="margin:0.5rem 0;">This bucket is empty.</p>"#
+            .to_string();
     }
 
     let mut rows = String::new();
@@ -1048,7 +1069,10 @@ fn render_object_table(
         let parent_href = if parent_prefix.is_empty() {
             base_browser.clone()
         } else {
-            format!("{base_browser}?prefix={}", encode_query_param(&parent_prefix))
+            format!(
+                "{base_browser}?prefix={}",
+                encode_query_param(&parent_prefix)
+            )
         };
         rows.push_str(&format!(
             r#"<tr>
@@ -1180,7 +1204,12 @@ async fn upload_object_submit(
                 match field.bytes().await {
                     Ok(b) => file_bytes = Some(b),
                     Err(e) => {
-                        let target = bucket_redirect_url(&bucket, &prefix, None, Some(&format!("Upload read error: {e}")));
+                        let target = bucket_redirect_url(
+                            &bucket,
+                            &prefix,
+                            None,
+                            Some(&format!("Upload read error: {e}")),
+                        );
                         let mut resp = Redirect::to(&target).into_response();
                         *resp.status_mut() = StatusCode::SEE_OTHER;
                         return resp;
@@ -1192,7 +1221,8 @@ async fn upload_object_submit(
     }
 
     let Some(data) = file_bytes else {
-        let target = bucket_redirect_url(&bucket, &prefix, None, Some("No file selected for upload."));
+        let target =
+            bucket_redirect_url(&bucket, &prefix, None, Some("No file selected for upload."));
         let mut resp = Redirect::to(&target).into_response();
         *resp.status_mut() = StatusCode::SEE_OTHER;
         return resp;
@@ -1208,7 +1238,8 @@ async fn upload_object_submit(
     let final_key = final_key.trim_start_matches('/').to_string();
 
     if final_key.is_empty() {
-        let target = bucket_redirect_url(&bucket, &prefix, None, Some("Object key cannot be empty."));
+        let target =
+            bucket_redirect_url(&bucket, &prefix, None, Some("Object key cannot be empty."));
         let mut resp = Redirect::to(&target).into_response();
         *resp.status_mut() = StatusCode::SEE_OTHER;
         return resp;
@@ -1272,12 +1303,7 @@ async fn delete_object_submit(
     resp
 }
 
-fn bucket_redirect_url(
-    bucket: &str,
-    prefix: &str,
-    msg: Option<&str>,
-    err: Option<&str>,
-) -> String {
+fn bucket_redirect_url(bucket: &str, prefix: &str, msg: Option<&str>, err: Option<&str>) -> String {
     let bucket_url = encode_segment(bucket);
     let mut params = Vec::new();
     if !prefix.is_empty() {
@@ -1320,11 +1346,7 @@ async fn public_bucket_browser_page(
         Ok(b) => b,
         Err(StorageError::NoSuchBucket(_)) => {
             let body = r#"<div class="card"><h2>404 — Bucket Not Found</h2><p class="muted">The requested bucket does not exist.</p></div>"#;
-            return (
-                StatusCode::NOT_FOUND,
-                page_layout("Not Found", "", body),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, page_layout("Not Found", "", body)).into_response();
         }
         Err(e) => {
             let body = format!(
@@ -1380,7 +1402,12 @@ async fn public_bucket_browser_page(
     };
 
     let name_url = encode_segment(&bucket.name);
-    let breadcrumbs_html = render_breadcrumbs(&format!("/_public/{name_url}"), &bucket.name, &prefix, false);
+    let breadcrumbs_html = render_breadcrumbs(
+        &format!("/_public/{name_url}"),
+        &bucket.name,
+        &prefix,
+        false,
+    );
     let table_html = render_object_table(
         &bucket.name,
         &prefix,
@@ -1481,7 +1508,10 @@ fn serve_object_response(
         .header(header::ACCEPT_RANGES, "bytes")
         .header(
             header::LAST_MODIFIED,
-            out.meta.updated_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+            out.meta
+                .updated_at
+                .format("%a, %d %b %Y %H:%M:%S GMT")
+                .to_string(),
         );
 
     if let Some(cr) = &out.content_range {

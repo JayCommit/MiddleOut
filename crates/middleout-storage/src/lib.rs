@@ -4,11 +4,11 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL};
 use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL};
 use chrono::{DateTime, Utc};
 use md5::{Digest as _, Md5};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
@@ -178,7 +178,11 @@ pub fn validate_bucket_name(name: &str) -> StorageResult<()> {
 
     // Check if formatted as an IP address (e.g., 192.168.5.4)
     let parts: Vec<&str> = name.split('.').collect();
-    if parts.len() == 4 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) {
+    if parts.len() == 4
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    {
         return Err(StorageError::InvalidBucketName(format!(
             "bucket name must not be formatted as an IP address: '{name}'"
         )));
@@ -193,7 +197,9 @@ pub fn validate_bucket_name(name: &str) -> StorageResult<()> {
 /// - no null bytes
 pub fn validate_object_key(key: &str) -> StorageResult<()> {
     if key.is_empty() {
-        return Err(StorageError::InvalidKey("object key cannot be empty".to_string()));
+        return Err(StorageError::InvalidKey(
+            "object key cannot be empty".to_string(),
+        ));
     }
     if key.len() > 1024 {
         return Err(StorageError::InvalidKey(format!(
@@ -245,15 +251,15 @@ fn encode_continuation_token(cursor: &str) -> String {
 }
 
 fn decode_continuation_token(token: &str) -> String {
-    if let Ok(bytes) = BASE64_URL.decode(token.trim()) {
-        if let Ok(s) = String::from_utf8(bytes) {
-            return s;
-        }
+    if let Ok(bytes) = BASE64_URL.decode(token.trim())
+        && let Ok(s) = String::from_utf8(bytes)
+    {
+        return s;
     }
-    if let Ok(bytes) = BASE64_STANDARD.decode(token.trim()) {
-        if let Ok(s) = String::from_utf8(bytes) {
-            return s;
-        }
+    if let Ok(bytes) = BASE64_STANDARD.decode(token.trim())
+        && let Ok(s) = String::from_utf8(bytes)
+    {
+        return s;
     }
     token.to_string()
 }
@@ -262,9 +268,9 @@ fn decode_continuation_token(token: &str) -> String {
 /// Returns `Ok((start, end_inclusive))` or `Err(StorageError::InvalidRange)`.
 fn parse_byte_range(range_header: &str, total_size: u64) -> StorageResult<(u64, u64)> {
     let range_header = range_header.trim();
-    let spec = range_header
-        .strip_prefix("bytes=")
-        .ok_or_else(|| StorageError::InvalidRange(format!("unsupported range unit: '{range_header}'")))?;
+    let spec = range_header.strip_prefix("bytes=").ok_or_else(|| {
+        StorageError::InvalidRange(format!("unsupported range unit: '{range_header}'"))
+    })?;
 
     if total_size == 0 {
         return Err(StorageError::InvalidRange(
@@ -279,9 +285,9 @@ fn parse_byte_range(range_header: &str, total_size: u64) -> StorageResult<(u64, 
         )));
     }
 
-    let (start_str, end_str) = spec
-        .split_once('-')
-        .ok_or_else(|| StorageError::InvalidRange(format!("missing '-' in range: '{range_header}'")))?;
+    let (start_str, end_str) = spec.split_once('-').ok_or_else(|| {
+        StorageError::InvalidRange(format!("missing '-' in range: '{range_header}'"))
+    })?;
 
     let start_str = start_str.trim();
     let end_str = end_str.trim();
@@ -289,11 +295,13 @@ fn parse_byte_range(range_header: &str, total_size: u64) -> StorageResult<(u64, 
     if start_str.is_empty() {
         // Suffix byte-range-spec: bytes=-suffix_len
         if end_str.is_empty() {
-            return Err(StorageError::InvalidRange(format!("empty range: '{range_header}'")));
+            return Err(StorageError::InvalidRange(format!(
+                "empty range: '{range_header}'"
+            )));
         }
-        let suffix_len: u64 = end_str
-            .parse()
-            .map_err(|_| StorageError::InvalidRange(format!("invalid suffix length: '{range_header}'")))?;
+        let suffix_len: u64 = end_str.parse().map_err(|_| {
+            StorageError::InvalidRange(format!("invalid suffix length: '{range_header}'"))
+        })?;
         if suffix_len == 0 {
             return Err(StorageError::InvalidRange(format!(
                 "zero suffix length in range: '{range_header}'"
@@ -303,9 +311,9 @@ fn parse_byte_range(range_header: &str, total_size: u64) -> StorageResult<(u64, 
         let end = total_size - 1;
         Ok((start, end))
     } else {
-        let start: u64 = start_str
-            .parse()
-            .map_err(|_| StorageError::InvalidRange(format!("invalid range start: '{range_header}'")))?;
+        let start: u64 = start_str.parse().map_err(|_| {
+            StorageError::InvalidRange(format!("invalid range start: '{range_header}'"))
+        })?;
         if start >= total_size {
             return Err(StorageError::InvalidRange(format!(
                 "range start {start} >= object size {total_size}"
@@ -314,9 +322,9 @@ fn parse_byte_range(range_header: &str, total_size: u64) -> StorageResult<(u64, 
         if end_str.is_empty() {
             Ok((start, total_size - 1))
         } else {
-            let end: u64 = end_str
-                .parse()
-                .map_err(|_| StorageError::InvalidRange(format!("invalid range end: '{range_header}'")))?;
+            let end: u64 = end_str.parse().map_err(|_| {
+                StorageError::InvalidRange(format!("invalid range end: '{range_header}'"))
+            })?;
             if start > end {
                 return Err(StorageError::InvalidRange(format!(
                     "range start {start} > range end {end}"
@@ -519,7 +527,8 @@ impl StorageEngine {
         // Collect any multipart upload IDs and part blobs for cleanup
         let mut upload_ids = Vec::new();
         {
-            let mut stmt = conn.prepare("SELECT upload_id FROM multipart_uploads WHERE bucket = ?1")?;
+            let mut stmt =
+                conn.prepare("SELECT upload_id FROM multipart_uploads WHERE bucket = ?1")?;
             let rows = stmt.query_map(params![name], |row| row.get::<_, String>(0))?;
             for r in rows {
                 upload_ids.push(r?);
@@ -705,10 +714,10 @@ impl StorageEngine {
             prev_blob
         };
 
-        if let Some(old_rel) = old_blob_rel_path {
-            if old_rel != blob_rel_path {
-                self.remove_blob_best_effort(&old_rel);
-            }
+        if let Some(old_rel) = old_blob_rel_path
+            && old_rel != blob_rel_path
+        {
+            self.remove_blob_best_effort(&old_rel);
         }
 
         Ok(ObjectMeta {
@@ -936,10 +945,10 @@ impl StorageEngine {
             prev_blob
         };
 
-        if let Some(old_rel) = old_dst_blob {
-            if old_rel != dst_blob_rel_path {
-                self.remove_blob_best_effort(&old_rel);
-            }
+        if let Some(old_rel) = old_dst_blob
+            && old_rel != dst_blob_rel_path
+        {
+            self.remove_blob_best_effort(&old_rel);
         }
 
         Ok(ObjectMeta {
@@ -1271,10 +1280,10 @@ impl StorageEngine {
             prev_rel
         };
 
-        if let Some(old_rel) = old_part_rel {
-            if old_rel != part_rel_path {
-                self.remove_blob_best_effort(&old_rel);
-            }
+        if let Some(old_rel) = old_part_rel
+            && old_rel != part_rel_path
+        {
+            self.remove_blob_best_effort(&old_rel);
         }
 
         Ok(PartInfo {
@@ -1340,12 +1349,13 @@ impl StorageEngine {
             }
             prev_part_num = cp.part_number;
 
-            let (rel_path, size, stored_etag) = stored_parts.get(&cp.part_number).ok_or_else(|| {
-                StorageError::InvalidPart(format!(
-                    "part {} not found for upload {upload_id}",
-                    cp.part_number
-                ))
-            })?;
+            let (rel_path, size, stored_etag) =
+                stored_parts.get(&cp.part_number).ok_or_else(|| {
+                    StorageError::InvalidPart(format!(
+                        "part {} not found for upload {upload_id}",
+                        cp.part_number
+                    ))
+                })?;
 
             let client_etag_clean = strip_etag_quotes(&cp.etag);
             let stored_etag_clean = strip_etag_quotes(stored_etag);
@@ -1357,7 +1367,10 @@ impl StorageEngine {
             }
 
             let part_md5_bytes = hex::decode(stored_etag_clean).map_err(|e| {
-                StorageError::Internal(format!("invalid stored hex MD5 for part {}: {e}", cp.part_number))
+                StorageError::Internal(format!(
+                    "invalid stored hex MD5 for part {}: {e}",
+                    cp.part_number
+                ))
             })?;
             binary_md5_concat.extend_from_slice(&part_md5_bytes);
             selected_parts.push((rel_path.clone(), *size));
@@ -1391,7 +1404,11 @@ impl StorageEngine {
             return Err(StorageError::Io(e));
         }
 
-        let multipart_etag = format!("{}-{}", hex::encode(Md5::digest(&binary_md5_concat)), parts.len());
+        let multipart_etag = format!(
+            "{}-{}",
+            hex::encode(Md5::digest(&binary_md5_concat)),
+            parts.len()
+        );
         let user_meta_json = serde_json::to_string(&upload_info.user_meta)
             .map_err(|e| StorageError::Internal(format!("failed to serialize user_meta: {e}")))?;
         let now = Utc::now();
@@ -1452,10 +1469,10 @@ impl StorageEngine {
         };
 
         // Clean up old object blob (if overwritten) and multipart part files
-        if let Some(old_rel) = old_obj_blob {
-            if old_rel != final_blob_rel_path {
-                self.remove_blob_best_effort(&old_rel);
-            }
+        if let Some(old_rel) = old_obj_blob
+            && old_rel != final_blob_rel_path
+        {
+            self.remove_blob_best_effort(&old_rel);
         }
         for (_, (part_rel, _, _)) in stored_parts {
             self.remove_blob_best_effort(&part_rel);
@@ -1637,7 +1654,10 @@ mod tests {
         assert_eq!(m1.size, 11);
         assert_eq!(m1.etag, "5eb63bbbe01eeed093cb22bb8f5acdc3");
         assert_eq!(m1.content_type, "text/plain");
-        assert_eq!(m1.user_meta.get("author").map(String::as_str), Some("pied-piper"));
+        assert_eq!(
+            m1.user_meta.get("author").map(String::as_str),
+            Some("pied-piper")
+        );
 
         let m2 = engine
             .put_object(PutObjectInput {
@@ -1693,7 +1713,9 @@ mod tests {
         assert_eq!(&got_copy.data[..], b"hello world");
 
         // Idempotent delete
-        engine.delete_object("test-bucket", "non-existent-key").unwrap();
+        engine
+            .delete_object("test-bucket", "non-existent-key")
+            .unwrap();
         engine.delete_object("test-bucket", "foo").unwrap();
         assert!(matches!(
             engine.head_object("test-bucket", "foo"),

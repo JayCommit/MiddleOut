@@ -4,19 +4,19 @@ pub mod console;
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{OriginalUri, Request},
-    http::{header, Method, StatusCode, Uri},
+    http::{Method, StatusCode, Uri, header},
     response::{IntoResponse, Redirect, Response},
     routing::get,
-    Json, Router,
 };
-use middleout_s3::{s3_router, S3Config, S3State};
+use middleout_s3::{S3Config, S3State, s3_router};
 use middleout_storage::StorageEngine;
 use serde_json::json;
 use tower::ServiceExt;
 
 use crate::config::AppConfig;
-use crate::console::{console_router, ConsoleState};
+use crate::console::{ConsoleState, console_router};
 
 pub fn build_app(storage: StorageEngine, config: AppConfig) -> Router {
     let config = Arc::new(config);
@@ -58,10 +58,9 @@ fn has_s3_auth(req: &Request) -> bool {
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
+        && (auth.trim_start().starts_with("AWS4-") || auth.trim_start().starts_with("AWS "))
     {
-        if auth.trim_start().starts_with("AWS4-") || auth.trim_start().starts_with("AWS ") {
-            return true;
-        }
+        return true;
     }
 
     if let Some(q) = req.uri().query() {
@@ -90,15 +89,14 @@ fn rewrite_api_s3_uri(uri: &Uri) -> Option<Uri> {
     let path = uri.path();
     let new_path = if path == "/api/s3" || path == "/api/s3/" {
         "/"
-    } else if let Some(stripped) = path.strip_prefix("/api/s3/") {
+    } else {
+        let stripped = path.strip_prefix("/api/s3/")?;
         // Need leading slash; handled below
         let new_p_and_q = match uri.query() {
             Some(q) => format!("/{stripped}?{q}"),
             None => format!("/{stripped}"),
         };
         return new_p_and_q.parse::<Uri>().ok();
-    } else {
-        return None;
     };
 
     let new_p_and_q = match uri.query() {
@@ -187,16 +185,10 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            resp.headers().get(header::LOCATION).unwrap(),
-            "/_console"
-        );
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/_console");
 
         // S3 client GET / without text/html goes to S3 ListBuckets (returns 403 AccessDenied without auth)
-        let req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
@@ -229,13 +221,14 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-        assert!(resp
-            .headers()
-            .get(header::LOCATION)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("err="));
+        assert!(
+            resp.headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("err=")
+        );
 
         // Valid login sets middleout_session cookie
         let req = Request::builder()

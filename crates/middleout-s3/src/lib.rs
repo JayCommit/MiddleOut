@@ -1,11 +1,11 @@
 pub mod error;
+pub mod handlers;
 pub mod sigv4;
 pub mod xml;
-pub mod handlers;
 
-use std::sync::Arc;
 use axum::Router;
 use middleout_storage::StorageEngine;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct S3Config {

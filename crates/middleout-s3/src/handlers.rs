@@ -1,22 +1,22 @@
 use std::collections::BTreeMap;
 
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, OriginalUri, Request, State};
 use axum::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
-use axum::Router;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use middleout_storage::{ListObjectsV2Input, ObjectMeta, PutObjectInput};
 use percent_encoding::percent_decode_str;
 use uuid::Uuid;
 
+use crate::S3State;
 use crate::error::S3Error;
 use crate::sigv4::{self, AuthOutcome};
 use crate::xml;
-use crate::S3State;
 
 pub fn router(state: S3State) -> Router {
     let max_bytes = state.config.max_object_bytes;
@@ -43,9 +43,7 @@ fn parse_s3_path(raw_path: &str) -> S3Target {
 
     match trimmed.split_once('/') {
         None => {
-            let bucket = percent_decode_str(trimmed)
-                .decode_utf8_lossy()
-                .into_owned();
+            let bucket = percent_decode_str(trimmed).decode_utf8_lossy().into_owned();
             S3Target::Bucket { bucket }
         }
         Some((raw_bucket, raw_key)) => {
@@ -55,9 +53,7 @@ fn parse_s3_path(raw_path: &str) -> S3Target {
             if raw_key.is_empty() {
                 S3Target::Bucket { bucket }
             } else {
-                let key = percent_decode_str(raw_key)
-                    .decode_utf8_lossy()
-                    .into_owned();
+                let key = percent_decode_str(raw_key).decode_utf8_lossy().into_owned();
                 S3Target::Object { bucket, key }
             }
         }
@@ -107,12 +103,11 @@ fn extract_user_meta(headers: &HeaderMap) -> BTreeMap<String, String> {
     let mut meta = BTreeMap::new();
     for (name, val) in headers.iter() {
         let name_str = name.as_str().to_ascii_lowercase();
-        if let Some(meta_key) = name_str.strip_prefix("x-amz-meta-") {
-            if !meta_key.is_empty() {
-                if let Ok(val_str) = val.to_str() {
-                    meta.insert(meta_key.to_string(), val_str.trim().to_string());
-                }
-            }
+        if let Some(meta_key) = name_str.strip_prefix("x-amz-meta-")
+            && !meta_key.is_empty()
+            && let Ok(val_str) = val.to_str()
+        {
+            meta.insert(meta_key.to_string(), val_str.trim().to_string());
         }
     }
     meta
@@ -182,8 +177,8 @@ fn verify_md5_header(headers: &HeaderMap, data: &[u8]) -> Result<Option<String>,
             .map_err(|_| S3Error::bad_digest("Invalid Content-MD5 header"))?
             .trim()
             .to_string();
-        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
         use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
         use md5::{Digest as _, Md5};
 
         let decoded_md5 = BASE64_STANDARD
@@ -225,9 +220,7 @@ fn parse_copy_source(raw_header: &str) -> Result<(String, String), S3Error> {
     let src_bucket = percent_decode_str(raw_bucket)
         .decode_utf8_lossy()
         .into_owned();
-    let src_key = percent_decode_str(raw_key)
-        .decode_utf8_lossy()
-        .into_owned();
+    let src_key = percent_decode_str(raw_key).decode_utf8_lossy().into_owned();
     Ok((src_bucket, src_key))
 }
 
@@ -288,10 +281,10 @@ async fn dispatch_s3_request(
     let target = parse_s3_path(uri.path());
 
     match target {
-        S3Target::Service => handle_service(&state, &auth, &method).await,
+        S3Target::Service => handle_service(state, &auth, &method).await,
         S3Target::Bucket { bucket } => {
             handle_bucket(
-                &state,
+                state,
                 &auth,
                 &method,
                 &bucket,
@@ -303,7 +296,7 @@ async fn dispatch_s3_request(
         }
         S3Target::Object { bucket, key } => {
             handle_object(
-                &state,
+                state,
                 &auth,
                 &method,
                 &bucket,
@@ -438,12 +431,12 @@ async fn handle_bucket(
             };
 
             let encoding_type = get_query_param(query_params, "encoding-type");
-            if let Some(enc) = encoding_type {
-                if enc != "url" {
-                    return Err(S3Error::invalid_argument(format!(
-                        "Invalid Encoding Method specified in Request: {enc}"
-                    )));
-                }
+            if let Some(enc) = encoding_type
+                && enc != "url"
+            {
+                return Err(S3Error::invalid_argument(format!(
+                    "Invalid Encoding Method specified in Request: {enc}"
+                )));
             }
             let encoding_type_url = encoding_type == Some("url");
 
@@ -535,9 +528,10 @@ async fn handle_object(
 
             // Check if Multipart UploadPart: ?partNumber=N&uploadId=ID
             if let Some(upload_id) = get_query_param(query_params, "uploadId") {
-                let part_num_str = get_query_param(query_params, "partNumber").ok_or_else(|| {
-                    S3Error::invalid_argument("Part number must be specified for UploadPart")
-                })?;
+                let part_num_str =
+                    get_query_param(query_params, "partNumber").ok_or_else(|| {
+                        S3Error::invalid_argument("Part number must be specified for UploadPart")
+                    })?;
                 let part_number: u32 = part_num_str.parse().map_err(|_| {
                     S3Error::new(
                         StatusCode::BAD_REQUEST,
@@ -651,37 +645,34 @@ async fn handle_object(
 
             require_object_read_access(state, auth, bucket)?;
 
-            let range_str = headers
-                .get(header::RANGE)
-                .and_then(|v| v.to_str().ok());
+            let range_str = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
             let out = state.storage.get_object(bucket, key, range_str)?;
 
             // Check conditional headers
-            if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
-                if !header_matches_etag(if_match, &out.meta.etag) {
-                    return Err(S3Error::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        "PreconditionFailed",
-                        "At least one of the pre-conditions you specified did not hold",
-                    ));
-                }
+            if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok())
+                && !header_matches_etag(if_match, &out.meta.etag)
+            {
+                return Err(S3Error::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "PreconditionFailed",
+                    "At least one of the pre-conditions you specified did not hold",
+                ));
             }
             if let Some(if_none_match) = headers
                 .get(header::IF_NONE_MATCH)
                 .and_then(|v| v.to_str().ok())
+                && header_matches_etag(if_none_match, &out.meta.etag)
             {
-                if header_matches_etag(if_none_match, &out.meta.etag) {
-                    let mut resp = StatusCode::NOT_MODIFIED.into_response();
-                    let quoted_etag = format!("\"{}\"", out.meta.etag.trim_matches('"'));
-                    if let Ok(v) = HeaderValue::from_str(&quoted_etag) {
-                        resp.headers_mut().insert(header::ETAG, v);
-                    }
-                    let last_modified = format_http_date(&out.meta.updated_at);
-                    if let Ok(v) = HeaderValue::from_str(&last_modified) {
-                        resp.headers_mut().insert(header::LAST_MODIFIED, v);
-                    }
-                    return Ok(resp);
+                let mut resp = StatusCode::NOT_MODIFIED.into_response();
+                let quoted_etag = format!("\"{}\"", out.meta.etag.trim_matches('"'));
+                if let Ok(v) = HeaderValue::from_str(&quoted_etag) {
+                    resp.headers_mut().insert(header::ETAG, v);
                 }
+                let last_modified = format_http_date(&out.meta.updated_at);
+                if let Ok(v) = HeaderValue::from_str(&last_modified) {
+                    resp.headers_mut().insert(header::LAST_MODIFIED, v);
+                }
+                return Ok(resp);
             }
 
             let status = if out.is_partial {
@@ -692,10 +683,10 @@ async fn handle_object(
 
             let mut resp_headers = HeaderMap::new();
             append_object_headers(&mut resp_headers, &out.meta, out.data.len() as u64);
-            if let Some(ref cr) = out.content_range {
-                if let Ok(v) = HeaderValue::from_str(cr) {
-                    resp_headers.insert(header::CONTENT_RANGE, v);
-                }
+            if let Some(ref cr) = out.content_range
+                && let Ok(v) = HeaderValue::from_str(cr)
+            {
+                resp_headers.insert(header::CONTENT_RANGE, v);
             }
 
             Ok((status, resp_headers, out.data).into_response())
@@ -704,31 +695,30 @@ async fn handle_object(
             require_object_read_access(state, auth, bucket)?;
             let meta = state.storage.head_object(bucket, key)?;
 
-            if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
-                if !header_matches_etag(if_match, &meta.etag) {
-                    return Err(S3Error::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        "PreconditionFailed",
-                        "At least one of the pre-conditions you specified did not hold",
-                    ));
-                }
+            if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok())
+                && !header_matches_etag(if_match, &meta.etag)
+            {
+                return Err(S3Error::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "PreconditionFailed",
+                    "At least one of the pre-conditions you specified did not hold",
+                ));
             }
             if let Some(if_none_match) = headers
                 .get(header::IF_NONE_MATCH)
                 .and_then(|v| v.to_str().ok())
+                && header_matches_etag(if_none_match, &meta.etag)
             {
-                if header_matches_etag(if_none_match, &meta.etag) {
-                    let mut resp = StatusCode::NOT_MODIFIED.into_response();
-                    let quoted_etag = format!("\"{}\"", meta.etag.trim_matches('"'));
-                    if let Ok(v) = HeaderValue::from_str(&quoted_etag) {
-                        resp.headers_mut().insert(header::ETAG, v);
-                    }
-                    let last_modified = format_http_date(&meta.updated_at);
-                    if let Ok(v) = HeaderValue::from_str(&last_modified) {
-                        resp.headers_mut().insert(header::LAST_MODIFIED, v);
-                    }
-                    return Ok(resp);
+                let mut resp = StatusCode::NOT_MODIFIED.into_response();
+                let quoted_etag = format!("\"{}\"", meta.etag.trim_matches('"'));
+                if let Ok(v) = HeaderValue::from_str(&quoted_etag) {
+                    resp.headers_mut().insert(header::ETAG, v);
                 }
+                let last_modified = format_http_date(&meta.updated_at);
+                if let Ok(v) = HeaderValue::from_str(&last_modified) {
+                    resp.headers_mut().insert(header::LAST_MODIFIED, v);
+                }
+                return Ok(resp);
             }
 
             let mut resp_headers = HeaderMap::new();
@@ -755,10 +745,12 @@ async fn handle_object(
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
                 let user_meta = extract_user_meta(headers);
-                let info =
-                    state
-                        .storage
-                        .initiate_multipart_upload(bucket, key, content_type, user_meta)?;
+                let info = state.storage.initiate_multipart_upload(
+                    bucket,
+                    key,
+                    content_type,
+                    user_meta,
+                )?;
                 let xml = xml::render_initiate_multipart_upload(&info);
                 return Ok(xml_response(StatusCode::OK, xml));
             }
@@ -794,17 +786,17 @@ mod tests {
     use std::sync::Arc;
 
     use axum::http::{Method, Request as HttpRequest, StatusCode, Uri};
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use md5::{Digest as _, Md5};
     use middleout_storage::StorageEngine;
     use tempfile::tempdir;
     use tower::ServiceExt;
 
+    use crate::S3Config;
     use crate::sigv4::{
         canonical_query_string, canonical_uri, compute_sigv4_signature, sha256_hex,
     };
-    use crate::S3Config;
 
     fn test_setup() -> (tempfile::TempDir, Router, S3State) {
         let dir = tempdir().unwrap();
@@ -850,10 +842,7 @@ mod tests {
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
                 let h = sha256_hex(&body_bytes);
-                headers.insert(
-                    "x-amz-content-sha256",
-                    HeaderValue::from_str(&h).unwrap(),
-                );
+                headers.insert("x-amz-content-sha256", HeaderValue::from_str(&h).unwrap());
                 h
             });
 
@@ -891,13 +880,8 @@ mod tests {
             scope,
             sha256_hex(canonical_req.as_bytes())
         );
-        let sig = compute_sigv4_signature(
-            &config.secret_access_key,
-            date_stamp,
-            region,
-            "s3",
-            &sts,
-        );
+        let sig =
+            compute_sigv4_signature(&config.secret_access_key, date_stamp, region, "s3", &sts);
         let auth_val = format!(
             "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
             config.access_key_id, scope, signed_headers_str, sig
@@ -1364,7 +1348,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let list_xml = String::from_utf8(read_body_bytes(resp).await.to_vec()).unwrap();
         assert!(list_xml.contains("<Key>dir/copied.txt</Key>"));
-        assert!(list_xml.contains("<CommonPrefixes><Prefix>dir/sub folder/</Prefix></CommonPrefixes>"));
+        assert!(
+            list_xml.contains("<CommonPrefixes><Prefix>dir/sub folder/</Prefix></CommonPrefixes>")
+        );
 
         // ListObjects v1 with marker
         let resp = app
@@ -1451,10 +1437,7 @@ mod tests {
                 Method::PUT,
                 &format!("/mp-bucket/large.bin?partNumber=1&uploadId={upload_id}"),
                 vec![
-                    (
-                        "x-amz-content-sha256",
-                        "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
-                    ),
+                    ("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"),
                     ("content-encoding", "aws-chunked"),
                 ],
                 Bytes::from_static(chunked_body),
@@ -1548,4 +1531,3 @@ mod tests {
         );
     }
 }
-
