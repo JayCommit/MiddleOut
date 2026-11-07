@@ -1,0 +1,31 @@
+[package]
+name = "middleout-s3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+middleout-storage = { path = "../middleout-storage" }
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+md-5.workspace = true
+hex.workspace = true
+base64.workspace = true
+percent-encoding.workspace = true
+url.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+tracing.workspace = true
+quick-xml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
